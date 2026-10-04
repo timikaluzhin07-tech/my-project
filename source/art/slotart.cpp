@@ -1,5 +1,7 @@
 #include "slotart.h"
 
+#include "art.h"
+#include "shade.h"
 #include "svg.h"
 #include "../core/parallel.h"
 
@@ -23,272 +25,191 @@ std::string goldDefs(const std::string& id) {
                         {0.7f, Color::hex(0xf6d985)}, {1, Color::hex(0x6a4608)}});
 }
 
-// Faceted "brilliant" gem: girdle outline -> table, triangular crown facets shaded by light.
-std::string brilliant(const std::vector<P>& g, P c, float table, Color base, Color light, Color dark) {
-    int n = (int)g.size();
-    std::vector<P> t(n);
-    for (int i = 0; i < n; i++) {
-        P m = {(g[i].x + g[(i + 1) % n].x) / 2, (g[i].y + g[(i + 1) % n].y) / 2};
-        t[i] = {c.x + (m.x - c.x) * table, c.y + (m.y - c.y) * table};
-    }
-    std::string s;
-    s += svg::path(pts(g), dark.css());
-    const float lx = -0.6f, ly = -0.8f;
-    for (int i = 0; i < n; i++) {
-        int j = (i + 1) % n;
-        int pi = (i + n - 1) % n;
-        // facet between girdle i..j and table i
-        P a = g[i], b = g[j], tt = t[i];
-        float mx = (a.x + b.x + tt.x) / 3 - c.x, my = (a.y + b.y + tt.y) / 3 - c.y;
-        float l = std::sqrt(mx * mx + my * my) + 1e-3f;
-        float k = 0.5f + 0.5f * (mx / l * lx + my / l * ly);
-        k = clamp01(k * 1.1f - (i % 2) * 0.12f);
-        Color col = k > 0.5f ? lerpColor(base, light, (k - 0.5f) * 2) : lerpColor(dark, base, k * 2);
-        s += svg::path(pts({a, b, tt}), col.css());
-        // facet between table i-1, table i and girdle i
-        P t0 = t[pi];
-        mx = (t0.x + tt.x + a.x) / 3 - c.x;
-        my = (t0.y + tt.y + a.y) / 3 - c.y;
-        l = std::sqrt(mx * mx + my * my) + 1e-3f;
-        k = clamp01(0.5f + 0.5f * (mx / l * lx + my / l * ly) + 0.08f);
-        col = k > 0.5f ? lerpColor(base, light, (k - 0.5f) * 2) : lerpColor(dark, base, k * 2);
-        s += svg::path(pts({t0, tt, a}), col.css());
-    }
-    s += "<defs>" + svg::linear("tbl", 0, 0, 1, 1, {{0, light}, {0.55f, base}, {1, base.scaled(0.8f)}}) + "</defs>";
-    s += svg::path(pts(t), svg::url("tbl"), svg::stroke(light.css(), 0.6f, 0.6f));
-    s += svg::path(pts(g), "none", svg::stroke(dark.scaled(0.6f).css(), 1.6f));
-    return s;
+// ------------------------------------------------------------------ symbols
+using shade::Layer;
+namespace M = shade::mat;
+
+Layer layer(const std::string& body, const shade::Material& m, float bevel, float depth = 1.f, int shadow = 0) {
+    Layer L;
+    L.svg = svg::open(100, 100) + "<defs>" + goldDefs("g") + "</defs>" + body + svg::close();
+    L.mat = m;
+    L.bevel = bevel;
+    L.depth = depth;
+    L.shadow = shadow;
+    L.shadowOpacity = 0.45f;
+    return L;
 }
 
-std::string sparkle(float x, float y, float r) {
-    return svg::path("M" + svg::num(x) + " " + svg::num(y - r) + " L" + svg::num(x + r * 0.18f) + " " + svg::num(y - r * 0.18f) +
-                         " L" + svg::num(x + r) + " " + svg::num(y) + " L" + svg::num(x + r * 0.18f) + " " + svg::num(y + r * 0.18f) +
-                         " L" + svg::num(x) + " " + svg::num(y + r) + " L" + svg::num(x - r * 0.18f) + " " + svg::num(y + r * 0.18f) +
-                         " L" + svg::num(x - r) + " " + svg::num(y) + " L" + svg::num(x - r * 0.18f) + " " + svg::num(y - r * 0.18f) + " Z",
-                     "#ffffff", "fill-opacity=\"0.9\"");
-}
+const char* GOLD = "#efc25a";
+const char* GOLD2 = "#d9a844";
 
-std::vector<P> ring(P c, float rx, float ry, int n, float rot) {
-    std::vector<P> v;
+std::vector<SDL_FPoint> ringPts(float cx, float cy, float rx, float ry, int n, float rot) {
+    std::vector<SDL_FPoint> v;
     for (int i = 0; i < n; i++) {
         float a = rot + i * 2 * PI / n;
-        v.push_back({c.x + std::cos(a) * rx, c.y + std::sin(a) * ry});
+        v.push_back({cx + std::cos(a) * rx, cy + std::sin(a) * ry});
     }
     return v;
 }
 
-std::string gemSymbol(Sym s) {
-    std::string out = svg::open(100, 100);
-    P c = {50, 52};
+// A loose cut stone, 100x100 box.
+Image gemArt(Sym s, float scale) {
+    std::vector<SDL_FPoint> g;
+    SDL_FPoint c = {50, 52};
+    Color body;
+    float table = 0.52f;
     switch (s) {
-        case BLUE:
-            out += brilliant(ring(c, 34, 41, 12, -PI / 2), c, 0.55f, Color::hex(0x2f6fe0), Color::hex(0xa8d0ff), Color::hex(0x0a2470));
+        case BLUE: g = ringPts(50, 52, 33, 41, 14, -PI / 2); body = Color::hex(0x1646c8); table = 0.56f; break;
+        case GREEN:
+            g = {{31, 11}, {69, 11}, {86, 28}, {86, 76}, {69, 93}, {31, 93}, {14, 76}, {14, 28}};
+            body = Color::hex(0x0a8a46);
+            table = 0.62f;
             break;
-        case GREEN: {
-            // emerald step cut: three nested octagons
-            std::vector<P> o = {{30, 12}, {70, 12}, {85, 27}, {85, 77}, {70, 92}, {30, 92}, {15, 77}, {15, 27}};
-            Color base = Color::hex(0x1ea862), light = Color::hex(0x9af5c4), dark = Color::hex(0x05401e);
-            out += svg::path(pts(o), dark.css());
-            for (int k = 0; k < 3; k++) {
-                float sc0 = 1 - k * 0.17f, sc1 = 1 - (k + 1) * 0.17f;
-                for (int i = 0; i < 8; i++) {
-                    int j = (i + 1) % 8;
-                    auto S = [&](P p, float sc) { return P{c.x + (p.x - c.x) * sc, c.y + (p.y - c.y) * sc}; };
-                    P a = S(o[i], sc0), b = S(o[j], sc0), bb = S(o[j], sc1), aa = S(o[i], sc1);
-                    float mx = (a.x + b.x) / 2 - c.x, my = (a.y + b.y) / 2 - c.y;
-                    float l = std::sqrt(mx * mx + my * my);
-                    float kk = clamp01(0.5f + 0.5f * (mx / l * -0.6f + my / l * -0.8f) - k * 0.06f);
-                    Color col = kk > 0.5f ? lerpColor(base, light, (kk - 0.5f) * 2) : lerpColor(dark, base, kk * 2);
-                    out += svg::path(pts({a, b, bb, aa}), col.css());
-                }
-            }
-            std::vector<P> inner;
-            for (auto& p : o) inner.push_back({c.x + (p.x - c.x) * 0.49f, c.y + (p.y - c.y) * 0.49f});
-            out += "<defs>" + svg::linear("tb", 0, 0, 1, 1, {{0, light}, {1, base}}) + "</defs>";
-            out += svg::path(pts(inner), svg::url("tb"));
-            out += svg::path(pts(o), "none", svg::stroke("#032a14", 1.6f));
-            break;
-        }
-        case YELLOW:
-            out += brilliant(ring(c, 42, 42, 6, -PI / 2), c, 0.5f, Color::hex(0xf2b51e), Color::hex(0xfff2a6), Color::hex(0x8a5400));
-            break;
-        case PURPLE: {
-            std::vector<P> tri;
+        case YELLOW: g = ringPts(50, 52, 43, 43, 6, -PI / 2); body = Color::hex(0xe39a0e); table = 0.5f; break;
+        case PURPLE:
             for (int i = 0; i < 3; i++) {
-                // slightly rounded trillion: three arcs approximated with 4 points each
                 float a0 = -PI / 2 + i * 2 * PI / 3;
                 for (int k = -1; k <= 2; k++) {
                     float a = a0 + k * 0.22f;
-                    float r = k == 0 || k == 1 ? 46.f : 40.f;
-                    tri.push_back({c.x + std::cos(a) * r, c.y + 4 + std::sin(a) * r});
+                    float r = (k == 0 || k == 1) ? 47.f : 41.f;
+                    g.push_back({50 + std::cos(a) * r, 56 + std::sin(a) * r});
                 }
             }
-            out += brilliant(tri, {c.x, c.y + 4}, 0.5f, Color::hex(0x9b44e3), Color::hex(0xe6c2ff), Color::hex(0x380c66));
+            c = {50, 56};
+            body = Color::hex(0x7b2bd2);
+            table = 0.48f;
             break;
-        }
-        case RED: {
-            std::vector<P> h;
-            for (int i = 0; i < 24; i++) {
-                float t = i * 2 * PI / 24;
+        default: // ruby heart
+            for (int i = 0; i < 26; i++) {
+                float t = i * 2 * PI / 26;
                 float x = 16 * std::pow(std::sin(t), 3.f);
                 float y = 13 * std::cos(t) - 5 * std::cos(2 * t) - 2 * std::cos(3 * t) - std::cos(4 * t);
-                h.push_back({50 + x * 2.55f, 50 - y * 2.55f});
+                g.push_back({50 + x * 2.6f, 48 - y * 2.6f});
             }
-            out += brilliant(h, {50, 48}, 0.52f, Color::hex(0xe3203d), Color::hex(0xffa2b0), Color::hex(0x640012));
+            c = {50, 47};
+            body = Color::hex(0xc8102c);
+            table = 0.5f;
             break;
-        }
-        default: break;
     }
-    out += sparkle(34, 30, 9);
-    out += svg::close();
-    return out;
+    Image img = shade::gem(100, 100, g, c, table, body, scale);
+    shade::glints(img, 2, (uint32_t)s * 31 + 5, 7 * scale / TEX_SCALE * 1.4f);
+    return img;
 }
 
-std::string chalice() {
-    std::string s = svg::open(100, 100) + "<defs>" + goldDefs("g") +
-                    svg::radial("ruby", 0.35f, 0.3f, 0.7f, {{0, Color::hex(0xff9aa8)}, {0.5f, Color::hex(0xd01430)}, {1, Color::hex(0x5a0010)}}) +
-                    svg::radial("wine", 0.5f, 0.5f, 0.6f, {{0, Color::hex(0x8a1028)}, {1, Color::hex(0x2a0008)}}) + "</defs>";
-    s += svg::path("M30 88 Q50 76 70 88 L74 94 L26 94 Z", svg::url("g"), svg::stroke("#4a3004", 1));
-    s += svg::ellipse(50, 94, 24, 4, svg::url("g"), svg::stroke("#4a3004", 1));
-    s += svg::path("M45 58 L55 58 L53 80 L47 80 Z", svg::url("g"), svg::stroke("#4a3004", 1));
-    s += svg::ellipse(50, 68, 8, 4, svg::url("g"), svg::stroke("#4a3004", 0.8f));
-    s += svg::path("M16 14 C16 48 32 62 50 62 C68 62 84 48 84 14 Z", svg::url("g"), svg::stroke("#4a3004", 1.4f));
-    s += svg::path("M22 30 C28 48 40 54 50 54 C60 54 72 48 78 30", "none", svg::stroke("#fff1b8", 1.2f, 0.6f));
-    s += svg::ellipse(50, 14, 34, 7, svg::url("g"), svg::stroke("#4a3004", 1.2f));
-    s += svg::ellipse(50, 14, 29, 5, svg::url("wine"));
-    s += svg::circle(50, 38, 8, svg::url("ruby"), svg::stroke("#4a3004", 1.2f));
-    for (float x : {32.f, 68.f}) s += svg::circle(x, 34, 4, "#2f6fe0", svg::stroke("#4a3004", 0.8f));
-    s += sparkle(28, 22, 7);
-    s += svg::close();
-    return s;
+std::vector<Layer> chaliceLayers() {
+    std::vector<Layer> L;
+    L.push_back(layer(svg::path("M28 88 Q50 75 72 88 L76 95 L24 95 Z", GOLD2), M::gold(), 5, 1, 2));
+    L.push_back(layer(svg::path("M45 58 L55 58 L53 82 L47 82 Z", GOLD), M::gold(), 4));
+    L.push_back(layer(svg::ellipse(50, 69, 9, 4.5f, GOLD), M::gold(), 4));
+    L.push_back(layer(svg::path("M14 14 C14 50 31 64 50 64 C69 64 86 50 86 14 Z", GOLD), M::gold(), 14, 0.9f, 2));
+    L.push_back(layer(svg::path("M22 31 C28 48 40 55 50 55 C60 55 72 48 78 31", "none", svg::stroke("#8a5f12", 1.6f)), M::gold(), 1, -0.5f));
+    L.push_back(layer(svg::ellipse(50, 14, 36, 7.5f, GOLD), M::gold(), 4));
+    L.push_back(layer(svg::ellipse(50, 14, 30, 5, "#3a0610"), M::gloss(), 3, -0.6f));
+    L.push_back(layer(svg::circle(50, 38, 8.5f, "#c8102c"), M::gloss(), 6, 1.4f, 1));
+    L.push_back(layer(svg::circle(31, 33, 4.5f, "#1646c8") + svg::circle(69, 33, 4.5f, "#1646c8"), M::gloss(), 4, 1.3f));
+    return L;
 }
 
-std::string ringSym() {
-    std::string s = svg::open(100, 100) + "<defs>" +
-                    svg::linear("band", 0, 0, 0, 1,
-                                {{0, Color::hex(0xf9e39a)}, {0.35f, Color::hex(0xc8962e)}, {0.6f, Color::hex(0x7a5410)}, {1, Color::hex(0xe6c06a)}}) +
-                    goldDefs("g") + "</defs>";
-    s += svg::path("M18 66 A32 24 0 1 0 82 66 A32 24 0 1 0 18 66 Z M28 66 A22 15 0 1 1 72 66 A22 15 0 1 1 28 66 Z",
-                   svg::url("band"), "fill-rule=\"evenodd\" " + svg::stroke("#4a3004", 1.2f));
-    // prongs
-    s += svg::path("M36 46 L40 30 L44 46 Z", svg::url("g"));
-    s += svg::path("M56 46 L60 30 L64 46 Z", svg::url("g"));
-    s += svg::ellipse(50, 47, 16, 5, svg::url("g"), svg::stroke("#4a3004", 1));
-    s += brilliant(ring({50, 30}, 22, 20, 10, -PI / 2), {50, 30}, 0.55f, Color::hex(0x1fb06a), Color::hex(0xb0ffd6),
-                   Color::hex(0x04401e));
-    s += sparkle(40, 22, 7);
-    s += svg::close();
-    return s;
+std::vector<Layer> ringLayers() {
+    std::vector<Layer> L;
+    L.push_back(layer(svg::path("M16 66 A34 25 0 1 0 84 66 A34 25 0 1 0 16 66 Z M27 66 A23 15 0 1 1 73 66 A23 15 0 1 1 27 66 Z",
+                                GOLD, "fill-rule=\"evenodd\""),
+                      M::gold(), 6, 1, 2));
+    L.push_back(layer(svg::path("M34 47 L40 26 L46 47 Z", GOLD) + svg::path("M54 47 L60 26 L66 47 Z", GOLD), M::gold(), 2.5f));
+    L.push_back(layer(svg::ellipse(50, 47, 17, 6, GOLD2), M::gold(), 4, 1, 1));
+    return L;
 }
 
-std::string hourglass() {
-    std::string s = svg::open(100, 100) + "<defs>" + goldDefs("g") +
-                    svg::linear("sand", 0, 0, 0, 1, {{0, Color::hex(0xf8d37a)}, {1, Color::hex(0xa8701e)}}) + "</defs>";
-    s += svg::path("M33 18 C33 40 46 44 46 50 C46 56 33 60 33 82 L67 82 C67 60 54 56 54 50 C54 44 67 40 67 18 Z",
-                   "#cfe6ff", "fill-opacity=\"0.28\" " + svg::stroke("#eef7ff", 1, 0.8f));
-    s += svg::path("M37 82 C40 70 46 66 50 63 C54 66 60 70 63 82 Z", svg::url("sand"));
-    s += svg::path("M38 28 C42 38 47 44 50 47 C53 44 58 38 62 28 Z", svg::url("sand"));
-    s += svg::line(50, 47, 50, 66, "#f8d37a", 1.2f);
-    s += svg::path("M37 22 C37 34 42 40 45 44", "none", svg::stroke("#ffffff", 1.4f, 0.6f));
-    s += svg::rect(22, 76, 56, 6, 1, "#4a3004", "fill-opacity=\"0.3\"");
-    s += svg::rect(24, 18, 6, 64, 2, svg::url("g"), svg::stroke("#4a3004", 0.8f));
-    s += svg::rect(70, 18, 6, 64, 2, svg::url("g"), svg::stroke("#4a3004", 0.8f));
-    s += svg::rect(18, 8, 64, 12, 4, svg::url("g"), svg::stroke("#4a3004", 1.2f));
-    s += svg::rect(18, 80, 64, 12, 4, svg::url("g"), svg::stroke("#4a3004", 1.2f));
-    for (float x : {32.f, 50.f, 68.f}) {
-        s += svg::circle(x, 14, 2.6f, "#d01430");
-        s += svg::circle(x, 86, 2.6f, "#2f6fe0");
-    }
-    s += sparkle(28, 12, 6);
-    s += svg::close();
-    return s;
+std::vector<Layer> hourglassLayers() {
+    std::vector<Layer> L;
+    L.push_back(layer(svg::path("M33 18 C33 40 46 44 46 50 C46 56 33 60 33 82 L67 82 C67 60 54 56 54 50 C54 44 67 40 67 18 Z",
+                                "#cfe6ff", "fill-opacity=\"0.32\""),
+                      M::gloss(), 8, 1.2f));
+    L.push_back(layer(svg::path("M37 82 C40 70 46 66 50 63 C54 66 60 70 63 82 Z", "#e8b45a"), M::clay(), 6, 0.8f));
+    L.push_back(layer(svg::path("M38 28 C42 38 47 44 50 47 C53 44 58 38 62 28 Z", "#e8b45a"), M::clay(), 4, 0.8f));
+    L.push_back(layer(svg::rect(49.2f, 47, 1.6f, 18, 0.8f, "#f2c66a"), M::clay(), 0.8f));
+    L.push_back(layer(svg::rect(23, 17, 7, 66, 3, GOLD) + svg::rect(70, 17, 7, 66, 3, GOLD), M::gold(), 3.5f, 1, 1));
+    L.push_back(layer(svg::rect(17, 7, 66, 13, 5, GOLD) + svg::rect(17, 80, 66, 13, 5, GOLD), M::gold(), 5, 1, 2));
+    L.push_back(layer(svg::circle(32, 13.5f, 2.8f, "#c8102c") + svg::circle(50, 13.5f, 2.8f, "#1646c8") +
+                          svg::circle(68, 13.5f, 2.8f, "#c8102c") + svg::circle(32, 86.5f, 2.8f, "#1646c8") +
+                          svg::circle(50, 86.5f, 2.8f, "#c8102c") + svg::circle(68, 86.5f, 2.8f, "#1646c8"),
+                      M::gloss(), 2.5f, 1.3f));
+    return L;
 }
 
-std::string crown() {
-    std::string s = svg::open(100, 100) + "<defs>" + goldDefs("g") +
-                    svg::linear("vel", 0, 0, 0, 1, {{0, Color::hex(0xb0122e)}, {1, Color::hex(0x4a0010)}}) +
-                    svg::radial("pearl", 0.35f, 0.3f, 0.7f, {{0, Color::hex(0xffffff)}, {1, Color::hex(0xbcb4a4)}}) + "</defs>";
-    s += svg::path("M24 52 Q50 14 76 52 Z", svg::url("vel"));
-    s += svg::path("M12 78 L8 34 L28 54 L37 24 L50 46 L63 24 L72 54 L92 34 L88 78 Z", svg::url("g"),
-                   svg::stroke("#4a3004", 1.4f));
-    s += svg::path("M18 70 L82 70", "none", svg::stroke("#fff1b8", 1.2f, 0.6f));
-    s += svg::rect(12, 72, 76, 16, 3, svg::url("g"), svg::stroke("#4a3004", 1.4f));
-    s += svg::circle(30, 80, 5, "#d01430", svg::stroke("#4a3004", 0.8f));
-    s += svg::circle(50, 80, 6, "#2f6fe0", svg::stroke("#4a3004", 0.8f));
-    s += svg::circle(70, 80, 5, "#1ea862", svg::stroke("#4a3004", 0.8f));
-    for (P p : {P{8, 34}, P{37, 24}, P{63, 24}, P{92, 34}}) s += svg::circle(p.x, p.y, 4.5f, svg::url("pearl"));
-    s += svg::circle(50, 12, 6, svg::url("g"), svg::stroke("#4a3004", 1));
-    s += svg::rect(48.5f, 2, 3, 8, 1, svg::url("g"));
-    s += sparkle(26, 60, 7);
-    s += svg::close();
-    return s;
+std::vector<Layer> crownLayers() {
+    std::vector<Layer> L;
+    L.push_back(layer(svg::path("M22 56 Q50 10 78 56 Z", "#7a0c22"), M::leather(), 12, 1.1f));
+    L.push_back(layer(svg::path("M12 80 L7 33 L28 55 L37 23 L50 46 L63 23 L72 55 L93 33 L88 80 Z", GOLD), M::gold(), 6, 1, 2));
+    L.push_back(layer(svg::rect(11, 71, 78, 18, 4, GOLD2), M::gold(), 5, 1.1f, 1));
+    L.push_back(layer(svg::circle(29, 80, 5.5f, "#c8102c") + svg::circle(71, 80, 5.5f, "#0a8a46"), M::gloss(), 5, 1.4f));
+    L.push_back(layer(svg::circle(50, 80, 7, "#1646c8"), M::gloss(), 6, 1.4f));
+    L.push_back(layer(svg::circle(7, 33, 5, "#f4efe4") + svg::circle(37, 23, 5, "#f4efe4") + svg::circle(63, 23, 5, "#f4efe4") +
+                          svg::circle(93, 33, 5, "#f4efe4"),
+                      M::ivory(), 5, 1.3f));
+    L.push_back(layer(svg::circle(50, 11, 6.5f, GOLD) + svg::rect(48.4f, 1, 3.2f, 9, 1, GOLD), M::gold(), 3.5f, 1, 1));
+    return L;
 }
 
-std::string scatter() {
-    std::string s = svg::open(100, 100) + "<defs>" + goldDefs("g") +
-                    svg::radial("sky", 0.5f, 0.45f, 0.6f, {{0, Color::hex(0x3a6aff)}, {0.6f, Color::hex(0x10248a)}, {1, Color::hex(0x040a2a)}}) + "</defs>";
-    s += svg::circle(50, 50, 46, svg::url("sky"));
+std::vector<Layer> scatterLayers() {
+    std::vector<Layer> L;
+    std::string d = "<defs>" + svg::radial("sky", 0.5f, 0.42f, 0.62f, {{0, Color::hex(0x2c5ae8)}, {0.6f, Color::hex(0x0d1f78)}, {1, Color::hex(0x040a2a)}}) + "</defs>";
+    L.push_back(layer(d + svg::circle(50, 50, 46, svg::url("sky")), M::gloss(), 8, 0.9f, 2));
+    std::string rays;
     for (int i = 0; i < 16; i++) {
         float a = i * PI / 8;
-        s += svg::path(pts({{50 + std::cos(a - 0.06f) * 10, 50 + std::sin(a - 0.06f) * 10},
-                            {50 + std::cos(a) * 44, 50 + std::sin(a) * 44},
-                            {50 + std::cos(a + 0.06f) * 10, 50 + std::sin(a + 0.06f) * 10}}),
-                       "#9ec0ff", "fill-opacity=\"0.22\"");
+        rays += svg::path(pts({{50 + std::cos(a - 0.05f) * 12, 50 + std::sin(a - 0.05f) * 12}, {50 + std::cos(a) * 40, 50 + std::sin(a) * 40},
+                               {50 + std::cos(a + 0.05f) * 12, 50 + std::sin(a + 0.05f) * 12}}),
+                          "#a8c8ff", "fill-opacity=\"0.25\"");
     }
-    s += svg::circle(50, 50, 46, "none", svg::stroke("#f3d27a", 3.5f));
-    s += svg::circle(50, 50, 41, "none", svg::stroke("#f3d27a", 1, 0.7f));
-    s += svg::path("M60 8 L30 54 L47 54 L37 92 L72 40 L54 40 L68 8 Z", svg::url("g"), svg::stroke("#fffbe0", 1.6f));
-    s += svg::close();
-    return s;
+    Layer r = layer(rays, M::gloss(), 1);
+    r.flat = true;
+    L.push_back(r);
+    L.push_back(layer(svg::path("M4 50 A46 46 0 1 0 96 50 A46 46 0 1 0 4 50 Z M10 50 A40 40 0 1 1 90 50 A40 40 0 1 1 10 50 Z", GOLD,
+                                "fill-rule=\"evenodd\""),
+                      M::gold(), 3.5f, 1.1f));
+    L.push_back(layer(svg::path("M61 7 L30 54 L47 54 L37 93 L73 40 L55 40 L69 7 Z", GOLD), M::gold(), 4, 1.3f, 2));
+    return L;
+}
+
+Image fitSymbol(const Image& art, float shadowAlpha = 0.6f) {
+    Image out((int)(SYM * TEX_SCALE), (int)(SYM * TEX_SCALE));
+    int ox = (out.w - art.w) / 2, oy = (out.h - art.h) / 2;
+    Image sh = art.shadow((int)(3 * TEX_SCALE), shadowAlpha);
+    int pad = (int)(3 * TEX_SCALE) * 2;
+    out.draw(sh, ox - pad + (int)(2 * TEX_SCALE), oy - pad + (int)(4 * TEX_SCALE));
+    out.draw(art, ox, oy);
+    return out;
 }
 
 Image symbolImage(Sym s) {
-    std::string src;
+    float inner = SYM * 0.88f;
+    float sc = TEX_SCALE * inner / 100.f;
+    Image art;
     switch (s) {
-        case CHALICE: src = chalice(); break;
-        case RING: src = ringSym(); break;
-        case HOURGLASS: src = hourglass(); break;
-        case CROWN: src = crown(); break;
-        case SCATTER: src = scatter(); break;
-        default: src = gemSymbol(s); break;
+        case CHALICE: art = shade::relief(100, 100, chaliceLayers(), sc); break;
+        case RING: {
+            art = shade::relief(100, 100, ringLayers(), sc);
+            Image stone = shade::gem(100, 100, ringPts(50, 30, 22, 19, 12, -PI / 2), {50, 30}, 0.55f, Color::hex(0x0a8a46), sc);
+            Image sh = stone.shadow((int)(2 * sc), 0.5f);
+            art.draw(sh, -(int)(4 * sc) + 1, -(int)(4 * sc) + 2);
+            art.draw(stone, 0, 0);
+            break;
+        }
+        case HOURGLASS: art = shade::relief(100, 100, hourglassLayers(), sc); break;
+        case CROWN: art = shade::relief(100, 100, crownLayers(), sc); break;
+        case SCATTER: art = shade::relief(100, 100, scatterLayers(), sc); break;
+        default: art = gemArt(s, sc); break;
     }
-    // rasterize into the padded symbol box, with a soft drop shadow
-    float inner = SYM * 0.86f;
-    Image art = gfx::rasterSvg(src, TEX_SCALE * inner / 100.f);
-    Image out((int)(SYM * TEX_SCALE), (int)(SYM * TEX_SCALE));
-    int ox = (out.w - art.w) / 2, oy = (out.h - art.h) / 2;
-    Image sh = art.shadow(4, 0.6f);
-    out.draw(sh, ox - 8 + 3, oy - 8 + 5);
-    out.draw(art, ox, oy);
-    return out;
+    if (s == CROWN || s == CHALICE || s == HOURGLASS || s == RING || s == SCATTER) shade::glints(art, 2, (uint32_t)s * 7 + 1, 6.f);
+    return fitSymbol(art);
 }
 
 Image orbImage(int value) {
     Color c = orbColor(value);
-    std::string s = svg::open(100, 100) + "<defs>" +
-                    svg::radial("o", 0.4f, 0.34f, 0.72f, {{0, c.scaled(2.4f)}, {0.4f, c.scaled(1.45f)}, {0.82f, c.scaled(0.85f)}, {1, c.scaled(0.5f)}}) +
-                    "</defs>";
-    s += svg::circle(50, 50, 44, svg::url("o"), svg::stroke(c.scaled(1.6f).css(), 2.f, 0.9f));
-    // crackling energy inside
-    Rng r(value * 13 + 7);
-    for (int k = 0; k < 5; k++) {
-        float a = r.uniform(0, 2 * PI), len = r.uniform(18, 36);
-        std::string d = "M50 50";
-        float x = 50, y = 50;
-        for (int j = 0; j < 4; j++) {
-            x += std::cos(a) * len / 4 + r.uniform(-4, 4);
-            y += std::sin(a) * len / 4 + r.uniform(-4, 4);
-            d += " L" + svg::num(x) + " " + svg::num(y);
-        }
-        s += "<path d=\"" + d + "\" fill=\"none\" " + svg::stroke(c.scaled(2.2f).css(), 1.2f, 0.55f) + "/>";
-    }
-    s += svg::ellipse(38, 30, 16, 9, "#ffffff", "fill-opacity=\"0.45\"");
-    s += svg::close();
-    float inner = SYM * 0.9f;
-    Image art = gfx::rasterSvg(s, TEX_SCALE * inner / 100.f);
-    Image out((int)(SYM * TEX_SCALE), (int)(SYM * TEX_SCALE));
-    int ox = (out.w - art.w) / 2, oy = (out.h - art.h) / 2;
-    out.draw(art, ox, oy);
+    float inner = SYM * 0.92f;
+    Image orb = shade::glassOrb(inner / 2, c);
+    Image out = fitSymbol(orb, 0.45f);
     std::string label = "x" + std::to_string(value);
     float size = value >= 100 ? 21 : 25;
     Image m = gfx::textMask(label, F_NUM, size, TEX_SCALE);
@@ -296,7 +217,11 @@ Image orbImage(int value) {
         Image outline = m.blurred(3);
         int tx = (out.w - m.w) / 2, ty = (out.h - m.h) / 2 + 2;
         for (int k = 0; k < 2; k++) out.drawTinted(outline, tx, ty, Color(0, 0, 0, 230));
-        out.drawTinted(m, tx, ty, Color::hex(0xfffbea));
+        // metallic numerals
+        Image num = m;
+        for (size_t i = 0; i < num.px.size(); i += 4) { num.px[i] = 255; num.px[i + 1] = 246; num.px[i + 2] = 220; }
+        shade::bevel(num, 1.4f * TEX_SCALE, 0.8f, shade::mat::silver());
+        out.draw(num, tx, ty);
     }
     return out;
 }
@@ -364,16 +289,11 @@ std::string engravingSvg() {
 
 Image buildMedallion() {
     float D = MED, c = MED / 2;
-    std::string s = svg::open(D, D) + "<defs>" +
-                    svg::radialU("rim", c, c, c, {{0.8f, Color::hex(0xf0cf72)}, {0.9f, Color::hex(0xa77a22)}, {0.96f, Color::hex(0xf7e2a0)}, {1, Color::hex(0x6a4608)}}) +
-                    svg::radialU("field", c - 30, c - 40, c * 0.95f, {{0, Color::hex(0xe8c25e)}, {0.7f, Color::hex(0xb88a2e)}, {1, Color::hex(0x7a5410)}}) +
-                    "</defs>";
-    s += svg::circle(c, c, c - 1, svg::url("rim"));
-    s += svg::circle(c, c, c * 0.84f, "#8a6418");
-    s += svg::circle(c, c, c * 0.81f, svg::url("field"));
-    // meander ring
+    int N = (int)std::ceil(D * TEX_SCALE);
+    // meander band mask
+    std::string ms = svg::open(D, D);
     int units = 36;
-    float r0 = c * 0.86f, r1 = c * 0.95f;
+    float r0 = c * 0.865f, r1 = c * 0.945f;
     for (int i = 0; i < units; i++) {
         float a0 = i * 2 * PI / units, a1 = (i + 1) * 2 * PI / units;
         auto P2 = [&](float t, float rr) {
@@ -383,41 +303,53 @@ Image buildMedallion() {
         };
         std::string d = "M" + P2(0, 0) + " L" + P2(0, 1) + " L" + P2(0.8f, 1) + " L" + P2(0.8f, 0.3f) + " L" + P2(0.35f, 0.3f) +
                         " L" + P2(0.35f, 0.65f) + " L" + P2(0.55f, 0.65f);
-        s += "<path d=\"" + d + "\" fill=\"none\" " + svg::stroke("#5a3c08", 1.6f, 0.9f) + "/>";
+        ms += "<path d=\"" + d + "\" fill=\"none\" " + svg::stroke("#ffffff", 2.f) + "/>";
     }
-    s += svg::circle(c, c, r0, "none", svg::stroke("#5a3c08", 1.2f));
-    s += svg::circle(c, c, r1, "none", svg::stroke("#5a3c08", 1.2f));
-    s += svg::close();
-    Image coin = gfx::rasterSvg(s);
-    // relief: raise the bust out of the field with emboss lighting
+    ms += svg::close();
+    Image meander = gfx::rasterSvg(ms).blurred(2);
     float rs = TEX_SCALE * 1.18f;
-    Image bust = gfx::rasterSvg(reliefSvg(), rs);
-    Image wreath = gfx::rasterSvg(wreathSvg(), rs);
-    Image height(coin.w, coin.h);
-    int ox = (coin.w - bust.w) / 2 + (int)(4 * TEX_SCALE), oy = (coin.h - bust.h) / 2 + (int)(2 * TEX_SCALE);
-    height.draw(bust, ox, oy);
-    Image hb = height.blurred(7);
-    Image wb = Image(coin.w, coin.h);
-    wb.draw(wreath, ox, oy);
-    Image wbb = wb.blurred(3);
-    float fieldR = c * 0.81f * TEX_SCALE;
-    for (int y = 1; y < coin.h - 1; y++)
-        for (int x = 1; x < coin.w - 1; x++) {
-            float dx = x - coin.w / 2.f, dy = y - coin.h / 2.f;
-            if (dx * dx + dy * dy > fieldR * fieldR) continue;
-            auto H = [&](int xx, int yy) {
-                return hb.at(xx, yy)[3] / 255.f + 0.6f * wbb.at(xx, yy)[3] / 255.f;
-            };
-            float gx = H(x + 1, y) - H(x - 1, y), gy = H(x, y + 1) - H(x, y - 1);
-            float shade = (gx * 0.7f + gy * 0.7f) * -1.f * 2.2f; // light from the top-left
-            float raised = H(x, y);
+    Image bustS = gfx::rasterSvg(reliefSvg(), rs), wreathS = gfx::rasterSvg(wreathSvg(), rs), engS = gfx::rasterSvg(engravingSvg(), rs);
+    int ox = (N - bustS.w) / 2 + (int)(4 * TEX_SCALE), oy = (N - bustS.h) / 2 + (int)(2 * TEX_SCALE);
+    auto place = [&](const Image& src) { Image full(N, N); full.draw(src, ox, oy); return full; };
+    Image bust = place(bustS), bustB = bust.blurred(9), bustFine = bust.blurred(3);
+    Image wreath = place(wreathS).blurred(3);
+    Image eng = place(engS).blurred(1);
+    Image coin(N, N);
+    std::vector<float> H((size_t)N * N, 0.f);
+    float S = TEX_SCALE;
+    parallelFor(N, [&](int y0, int y1) {
+        for (int y = y0; y < y1; y++)
+            for (int x = 0; x < N; x++) {
+                float dx = (x + 0.5f) / S - c, dy = (y + 0.5f) / S - c;
+                float r = std::sqrt(dx * dx + dy * dy);
+                float cover = clamp01((c - 1 - r) * S + 0.5f);
+                if (cover <= 0) continue;
+                auto sm = [](float e0, float e1, float v) { float t = clamp01((v - e0) / (e1 - e0)); return t * t * (3 - 2 * t); };
+                float edge = sm(c - 1, c - 9, r);                      // rolled outer edge
+                float rim = sm(c * 0.83f, c * 0.85f, r) * (1 - sm(c * 0.955f, c * 0.975f, r));
+                float hgt = 0.35f * edge + 0.55f * rim * edge;
+                bool field = r < c * 0.83f;
+                float bustH = bustB.at(x, y)[3] / 255.f * 0.9f + bustFine.at(x, y)[3] / 255.f * 0.45f;
+                if (field) hgt += bustH + wreath.at(x, y)[3] / 255.f * 0.45f - eng.at(x, y)[3] / 255.f * 0.35f;
+                hgt += meander.at(x, y)[3] / 255.f * 0.22f;
+                H[(size_t)y * N + x] = hgt;
+                uint8_t* p = coin.at(x, y);
+                Color al = field ? (bustH > 0.3f ? Color::hex(0xf2c35e) : Color::hex(0xcf9c3e)) : Color::hex(0xe8b44c);
+                p[0] = al.r; p[1] = al.g; p[2] = al.b;
+                p[3] = (uint8_t)(cover * 255);
+            }
+    });
+    coin.grain(0.035f, 77, 2);
+    shade::Material gold = shade::mat::gold();
+    gold.shininess = 45;
+    shade::shadeHeight(coin, H, 7.5f * S, gold);
+    // dark patina in the recesses of the engraving
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
             uint8_t* p = coin.at(x, y);
-            float lift = 1 + 0.18f * std::min(raised, 1.f);
-            for (int k = 0; k < 3; k++) p[k] = (uint8_t)std::clamp(p[k] * lift + shade * 255.f, 0.f, 255.f);
+            float e = eng.at(x, y)[3] / 255.f * 0.55f;
+            for (int k = 0; k < 3; k++) p[k] = (uint8_t)(p[k] * (1 - e));
         }
-    Image eng = gfx::rasterSvg(engravingSvg(), rs);
-    coin.draw(eng, ox, oy, 0.9f);
-    coin.grain(0.03f, 77);
     return coin;
 }
 
@@ -490,39 +422,72 @@ Image buildFrame() {
     float gw = CELL * slot::COLS, gh = CELL * slot::ROWS;
     float b = 20;
     float W = gw + b * 2, H = gh + b * 2;
-    std::string s = svg::open(W, H) + "<defs>" +
-                    svg::linear("fr", 0, 0, 0, 1, {{0, Color::hex(0xf9e39a)}, {0.3f, Color::hex(0xc8962e)}, {0.55f, Color::hex(0x8a6418)}, {0.8f, Color::hex(0xe6c06a)}, {1, Color::hex(0x7a5410)}}) +
-                    "</defs>";
-    std::string outer = "M0 8 Q0 0 8 0 L" + svg::num(W - 8) + " 0 Q" + svg::num(W) + " 0 " + svg::num(W) + " 8 L" + svg::num(W) + " " +
-                        svg::num(H - 8) + " Q" + svg::num(W) + " " + svg::num(H) + " " + svg::num(W - 8) + " " + svg::num(H) + " L8 " +
-                        svg::num(H) + " Q0 " + svg::num(H) + " 0 " + svg::num(H - 8) + " Z";
+    auto doc = [&](const std::string& body) { return svg::open(W, H) + body + svg::close(); };
+    std::string outer = "M0 9 Q0 0 9 0 L" + svg::num(W - 9) + " 0 Q" + svg::num(W) + " 0 " + svg::num(W) + " 9 L" + svg::num(W) + " " +
+                        svg::num(H - 9) + " Q" + svg::num(W) + " " + svg::num(H) + " " + svg::num(W - 9) + " " + svg::num(H) + " L9 " +
+                        svg::num(H) + " Q0 " + svg::num(H) + " 0 " + svg::num(H - 9) + " Z";
     std::string inner = " M" + svg::num(b) + " " + svg::num(b) + " L" + svg::num(b) + " " + svg::num(b + gh) + " L" + svg::num(b + gw) + " " +
                         svg::num(b + gh) + " L" + svg::num(b + gw) + " " + svg::num(b) + " Z";
-    s += svg::path(outer + inner, svg::url("fr"), "fill-rule=\"evenodd\"");
-    s += svg::rect(3.5f, 3.5f, W - 7, H - 7, 6, "none", svg::stroke("#5a3c08", 1.2f));
-    s += svg::rect(b - 3, b - 3, gw + 6, gh + 6, 2, "none", svg::stroke("#fff1b8", 1.2f, 0.7f));
-    // meander along top and bottom bands
+    std::vector<Layer> L;
+    Layer body;
+    body.svg = doc(svg::path(outer + inner, "#d9a844", "fill-rule=\"evenodd\""));
+    body.mat = shade::mat::gold();
+    body.bevel = 9;
+    body.depth = 0.7f;
+    body.shadow = 4;
+    body.shadowOpacity = 0.7f;
+    L.push_back(body);
+    std::string key;
     for (float yb : {6.f, H - b + 6}) {
-        for (float x = 14; x + 16 < W - 10; x += 16) {
+        for (float x = 16; x + 16 < W - 14; x += 16) {
             std::string d = "M" + svg::num(x) + " " + svg::num(yb + 9) + " L" + svg::num(x) + " " + svg::num(yb) + " L" + svg::num(x + 12) + " " +
                             svg::num(yb) + " L" + svg::num(x + 12) + " " + svg::num(yb + 6) + " L" + svg::num(x + 5) + " " + svg::num(yb + 6) +
                             " L" + svg::num(x + 5) + " " + svg::num(yb + 3) + " L" + svg::num(x + 8) + " " + svg::num(yb + 3);
-            s += "<path d=\"" + d + "\" fill=\"none\" " + svg::stroke("#5a3c08", 1.4f, 0.85f) + "/>";
+            key += "<path d=\"" + d + "\" fill=\"none\" " + svg::stroke("#f3cf72", 1.6f) + "/>";
         }
     }
+    Layer meander;
+    meander.svg = doc(key);
+    meander.mat = shade::mat::gold();
+    meander.bevel = 0.8f;
+    meander.depth = 1.2f;
+    L.push_back(meander);
+    std::string ros, gems;
     for (P p : {P{b / 2, b / 2}, P{W - b / 2, b / 2}, P{b / 2, H - b / 2}, P{W - b / 2, H - b / 2}}) {
-        s += svg::circle(p.x, p.y, 9, svg::url("fr"), svg::stroke("#5a3c08", 1.2f));
-        s += svg::circle(p.x, p.y, 4, "#d01430");
+        ros += svg::circle(p.x, p.y, 10, "#e8b44c");
+        gems += svg::circle(p.x, p.y, 5, "#c8102c");
     }
-    s += svg::close();
-    return gfx::rasterSvg(s);
+    Layer rosL;
+    rosL.svg = doc(ros);
+    rosL.mat = shade::mat::gold();
+    rosL.bevel = 5;
+    rosL.shadow = 1;
+    L.push_back(rosL);
+    Layer gemL;
+    gemL.svg = doc(gems);
+    gemL.mat = shade::mat::gloss();
+    gemL.bevel = 4;
+    gemL.depth = 1.3f;
+    L.push_back(gemL);
+    Image img = shade::relief(W, H, L);
+    shade::glints(img, 6, 99, 7);
+    return img;
 }
 
 Image buildCoin() {
-    std::string s = svg::open(40, 40) + "<defs>" + goldDefs("g") + "</defs>" + svg::circle(20, 20, 18, svg::url("g"), svg::stroke("#5a3c08", 1.4f)) +
-                    svg::circle(20, 20, 13, "none", svg::stroke("#fff1b8", 1.2f, 0.7f)) +
-                    svg::path("M23 9 L14 22 L19 22 L16 31 L26 18 L21 18 L24 9 Z", "#7a5410") + svg::close();
-    return gfx::rasterSvg(s);
+    std::vector<Layer> L;
+    Layer c;
+    c.svg = svg::open(40, 40) + svg::circle(20, 20, 18, "#e8b44c") + svg::close();
+    c.mat = shade::mat::gold();
+    c.bevel = 4;
+    L.push_back(c);
+    Layer bolt;
+    bolt.svg = svg::open(40, 40) + svg::path("M23 8 L13 22 L19 22 L15 32 L27 17 L21 17 L25 8 Z", "#f2c35e") + svg::close();
+    bolt.mat = shade::mat::gold();
+    bolt.bevel = 1.5f;
+    bolt.depth = 1.2f;
+    L.push_back(bolt);
+    return shade::relief(40, 40, L);
 }
 
 } // namespace
@@ -549,18 +514,20 @@ Color orbColor(int v) {
 void build(Assets& a) {
     for (int i = 0; i < SYM_COUNT; i++) {
         if (i == ORB) continue;
-        Image img = symbolImage((Sym)i);
-        a.sym[i] = gfx::upload(img);
-        Image g = img.blurred(10);
-        for (size_t k = 0; k < g.px.size(); k += 4) g.px[k] = g.px[k + 1] = g.px[k + 2] = 255;
-        a.symGlow[i] = gfx::upload(g);
+        const Image* img = &art::cached("slot.sym" + std::to_string(i), [i] { return symbolImage((Sym)i); });
+        a.sym[i] = gfx::upload(*img);
+        a.symGlow[i] = gfx::upload(art::cached("slot.glow" + std::to_string(i), [img] {
+            Image g = img->blurred(10);
+            for (size_t k = 0; k < g.px.size(); k += 4) g.px[k] = g.px[k + 1] = g.px[k + 2] = 255;
+            return g;
+        }));
     }
     static const int vals[] = {2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 50, 100, 250, 500};
-    for (int v : vals) a.orbs[v] = gfx::upload(orbImage(v));
-    a.medallion = gfx::upload(buildMedallion());
-    a.background = gfx::upload(buildBackground());
-    a.frame = gfx::upload(buildFrame());
-    a.coin = gfx::upload(buildCoin());
+    for (int v : vals) a.orbs[v] = gfx::upload(art::cached("slot.orb" + std::to_string(v), [v] { return orbImage(v); }));
+    a.medallion = gfx::upload(art::cached("slot.medallion", buildMedallion));
+    a.background = gfx::upload(art::cached("slot.background", buildBackground));
+    a.frame = gfx::upload(art::cached("slot.frame", buildFrame));
+    a.coin = gfx::upload(art::cached("slot.coin", buildCoin));
 }
 
 } // namespace slotart

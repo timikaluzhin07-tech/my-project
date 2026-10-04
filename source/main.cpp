@@ -9,10 +9,12 @@
 
 #include "core/app.h"
 #include "core/audio.h"
+#include "core/fx.h"
 #include "core/gfx.h"
 #include "core/input.h"
 #include "core/platform.h"
 #include "core/save.h"
+#include "core/trophy.h"
 #include "core/ui.h"
 #include "art/art.h"
 
@@ -43,6 +45,7 @@ std::unique_ptr<Scene> build(SceneId id) {
         case SC_SLOTS: return makeSlotsScene();
         case SC_PLAYERS: return makePlayersScene();
         case SC_SETTINGS: return makeSettingsScene();
+        case SC_TROPHIES: return makeTrophiesScene();
     }
     return makeHallScene();
 }
@@ -116,7 +119,7 @@ struct Script {
                 ss >> s;
                 static const std::map<std::string, SceneId> sc = {
                     {"hall", SC_HALL}, {"blackjack", SC_BLACKJACK}, {"poker", SC_POKER}, {"roulette", SC_ROULETTE},
-                    {"slots", SC_SLOTS}, {"players", SC_PLAYERS}, {"settings", SC_SETTINGS}};
+                    {"slots", SC_SLOTS}, {"players", SC_PLAYERS}, {"settings", SC_SETTINGS}, {"trophies", SC_TROPHIES}};
                 if (sc.count(s)) app::go(sc.at(s));
                 wait = 40;
             } else if (cmd == "players") {
@@ -130,6 +133,13 @@ struct Script {
                 long long amount = 0;
                 ss >> pl >> amount;
                 save::player(pl).balance = amount;
+            } else if (cmd == "jackpot") {
+                jackpot::forceNext();
+            } else if (cmd == "trophy") {
+                // trophy P ID : unlock a trophy (testing the popup)
+                int pl = 0, id = 0;
+                ss >> pl >> id;
+                trophy::unlock(pl, (trophy::Id)id);
             } else if (cmd == "seed") {
                 u64 s;
                 ss >> s;
@@ -250,6 +260,7 @@ int main(int argc, char** argv) {
     save::load();
     audio::init();
     app::applyVolumes();
+    fx::init();
 
     g_scene = build(g_test ? SC_HALL : SC_BOOT);
     syncSceneAudio();
@@ -281,6 +292,7 @@ int main(int argc, char** argv) {
                 ui::spinner(SCREEN_W / 2.f, SCREEN_H / 2.f, 16, g_time);
                 SDL_RenderPresent(g_renderer);
                 g_scene.reset();
+                fx::clear();
                 Uint64 t0 = SDL_GetPerformanceCounter();
                 g_scene = build(g_pending);
                 SDL_Log("scene %d built in %.0f ms", (int)g_pending,
@@ -295,12 +307,19 @@ int main(int argc, char** argv) {
             if (g_fade <= 0) g_trans = T_NONE;
         }
         if (g_scene && g_trans != T_OUT) g_scene->update(dt);
+        fx::update(dt);
+        trophy::update(dt);
         syncSceneAudio();
 
         SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 255);
         SDL_RenderClear(g_renderer);
+        fx::beginFrame();
         if (g_scene) g_scene->render();
+        fx::render();
+        fx::endFrame();
         ui::renderToasts();
+        trophy::render();
+        fx::overlay();
         if (g_fade > 0) gfx::dim(ease::inOutCubic(g_fade));
         if (!g_script.iconPath.empty()) {
             renderIcon(g_script.iconPath);
@@ -319,6 +338,9 @@ int main(int argc, char** argv) {
     save::store();
     g_scene.reset();
     art::shutdown();
+    fx::shutdown();
+    trophy::shutdown();
+    ui::releaseSkin();
     audio::shutdown();
     input::shutdown();
     gfx::shutdown();

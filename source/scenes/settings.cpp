@@ -2,6 +2,7 @@
 #include "../art/backdrop.h"
 #include "../core/app.h"
 #include "../core/audio.h"
+#include "../core/fx.h"
 #include "../core/gfx.h"
 #include "../core/input.h"
 #include "../core/save.h"
@@ -33,6 +34,14 @@ public:
                                [&s](int) { s.fastDeal = !s.fastDeal; save::store(); }, nullptr});
         menu_.items.push_back({"Слот: ход переходит дальше", [&s] { return std::string(s.slotRotate ? "Вкл" : "Выкл"); },
                                [&s](int) { s.slotRotate = !s.slotRotate; save::store(); }, nullptr});
+        menu_.items.push_back({"Тряска экрана и киноплёнка", [&s] { return std::string(s.effects ? "Вкл" : "Выкл"); },
+                               [&s](int) { s.effects = !s.effects; save::store(); if (s.effects) fx::shake(0.5f, false); }, nullptr});
+        menu_.items.push_back({"Вибрация контроллеров", [&s] { return std::string(s.rumble ? "Вкл" : "Выкл"); },
+                               [&s](int) {
+                                   s.rumble = !s.rumble;
+                                   save::store();
+                                   if (s.rumble) input::rumble(ANY_PAD, 0.7f, 0.3f);
+                               }, nullptr});
         menu_.items.push_back({"Сбросить фишки всех игроков", nullptr, nullptr, [this] {
                                    dialog_.show("СБРОС", "У всех игроков снова будет по " + fmtMoney(START_BALANCE) +
                                                              " фишек,\nстатистика обнулится.",
@@ -65,18 +74,20 @@ public:
         gfx::draw(bg_, 0, 0);
         gfx::textGold("НАСТРОЙКИ", SCREEN_W / 2.f, 62, F_TITLE, 42);
         ui::rule(SCREEN_W / 2.f, 94, 420);
-        float w = 640, x = (SCREEN_W - w) / 2, y = 124;
-        float h = menu_.items.size() * 50 + 30;
+        float w = 640, x = (SCREEN_W - w) / 2, y = 120;
+        float h = menu_.items.size() * 44 + 26;
         ui::panel(x - 10, y - 14, w + 20, h, 1.f);
-        menu_.render(x, y, w, 50);
+        menu_.render(x, y, w, 44);
         const char* notes[] = {
             "", "", "",
             "Авто — карты прячутся, когда за покерным столом больше одного человека. Подсмотреть: удерживайте R.",
             "Карты летят быстрее, дилер не делает пауз.",
-            "После каждого вращения автомат переходит к следующему игроку.", "", ""};
-        const char* note = notes[std::clamp(menu_.sel, 0, 7)];
+            "После каждого вращения автомат переходит к следующему игроку.",
+            "Экран вздрагивает на крупных выигрышах, поверх картинки — лёгкое зерно киноплёнки.",
+            "HD-вибрация Joy-Con и Pro Controller: фишки, шарик, молнии Зевса.", "", ""};
+        const char* note = notes[std::clamp(menu_.sel, 0, 9)];
         if (note[0]) gfx::textWrapped(note, x, y + h + 4, w, F_SANS, 17, pal::muted);
-        gfx::text("Grand Casino NX 1.0 · только виртуальные фишки, без реальных денег", SCREEN_W / 2.f, 640, F_SANS, 15,
+        gfx::text("Grand Casino NX 1.1 · только виртуальные фишки, без реальных денег", SCREEN_W / 2.f, 640, F_SANS, 15,
                   pal::dim, 0);
         gfx::text("Шрифты Playfair Display, PT Sans, Oswald (SIL OFL) · nanosvg (zlib) · SDL2", SCREEN_W / 2.f, 660,
                   F_SANS, 13, pal::dim, 0);

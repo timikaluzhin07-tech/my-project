@@ -86,6 +86,9 @@ void drawCenteredXY(const Tex& t, float cx, float cy, float sx, float sy, float 
 void drawPart(const Tex& t, float sx, float sy, float sw, float sh, float x, float y, float w, float h,
               float alpha = 1.f);
 
+// Nine-slice: corners keep their size (border, logical), edges and centre stretch.
+void nine(const Tex& t, float x, float y, float w, float h, float border, float alpha = 1.f, Color tint = pal::white);
+
 void rect(float x, float y, float w, float h, Color c);
 void rectGrad(float x, float y, float w, float h, Color top, Color bottom);
 void rectGradH(float x, float y, float w, float h, Color left, Color right);

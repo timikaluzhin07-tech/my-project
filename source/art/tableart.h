@@ -4,6 +4,7 @@
 
 #include "../core/gfx.h"
 #include "art.h"
+#include "shade.h"
 
 namespace art {
 
@@ -14,6 +15,28 @@ void arcText(Image& img, const std::string& s, float cx, float cy, float rx, flo
 // Straight text stamped into an image (centred).
 void stampText(Image& img, const std::string& s, float cx, float cy, FontId f, float size, Color c,
                float angleDeg = 0.f);
+
+// Lacquered wood: replaces the colour of every opaque pixel with a grain pattern.
+// polar = true makes the grain follow rings around (cx, cy) (table rails, wheel bowls).
+void woodGrain(Image& img, float cx, float cy, Color dark, Color light, uint32_t seed, bool polar, float stretch = 1.f);
+// Felt under a pendant lamp: brightness falls off from (lx, ly); `edge` returns the
+// distance (logical px) from a point to the felt's border (negative = outside).
+void feltLight(Image& img, float lx, float ly, float rx, float ry, const std::function<float(float, float)>& edge,
+               float ao = 26.f, float strength = 1.f);
+// Padded leather rail along an SVG shape (evenodd path), with stitching.
+Image leatherRail(const std::string& svgPath, float w, float h, Color base, float padding, const std::string& stitchSvg);
+// Relief of the screen region (x, y, w, h): layer svgs are fragments in screen
+// coordinates; shapes that leave the region are not bevelled at its border.
+Image regionRelief(float x, float y, float w, float h, std::vector<shade::Layer> layers, float margin = 30.f);
+// Noir portrait for a poker bot (deterministic per name).
+struct PortraitTraits {
+    bool female = false, hat = false, glasses = false, beard = false, cigar = false, redTie = false, earrings = false;
+    Color skin, hair, suit;
+};
+PortraitTraits portraitTraits(const std::string& name);
+Image botPortrait(const std::string& name, float size);
+// Where the lit end of the cigar sits, relative to the portrait centre, per unit of size.
+constexpr float CIGAR_TIP_X = 0.265f, CIGAR_TIP_Y = 0.125f;
 
 // Row of chip denominations; the selected one is raised.
 void drawChipRack(int selected, float cx, float y, i64 affordable, float alpha = 1.f);

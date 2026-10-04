@@ -22,7 +22,7 @@ ICON		:=	icon.jpg
 
 APP_TITLE	:=	Grand Casino NX
 APP_AUTHOR	:=	Grand Casino NX
-APP_VERSION	:=	1.0.0
+APP_VERSION	:=	1.1.0
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 

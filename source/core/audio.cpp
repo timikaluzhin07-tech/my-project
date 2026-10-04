@@ -540,6 +540,272 @@ Buf sfxAmbience() {
 }
 
 // ---------------------------------------------------------------------------
+// Crowd, drums and stingers
+// ---------------------------------------------------------------------------
+void addClap(Buf& b, size_t at, float amp, Rng& r) {
+    Noise n;
+    n.s = (uint32_t)r.next() | 1;
+    Biquad f = Biquad::bp(r.uniform(900, 2400), r.uniform(1.2f, 2.2f));
+    // a clap is two or three quick reflections of the same burst
+    float d = r.uniform(0.006f, 0.012f);
+    size_t len = (size_t)(0.09f * SR);
+    for (size_t i = 0; i < len && at + i < b.size(); i++) {
+        float t = i / (float)SR;
+        float e = std::exp(-t / d) + 0.5f * envAD(t - 0.009f, 0.0005f, d) + 0.25f * envAD(t - 0.017f, 0.0005f, d * 1.5f);
+        b[at + i] += f(n.white()) * e * amp;
+    }
+}
+
+// A crowd voice: buzzy source through two vowel formants, gliding in pitch.
+void addVoice(Buf& b, size_t at, float dur, float f0, float f1, float fa, float fb, float amp, Rng& r) {
+    Biquad A = Biquad::bp(fa, 4.f), B = Biquad::bp(fb, 5.f), lp = Biquad::lp(3200);
+    Noise n;
+    n.s = (uint32_t)r.next() | 1;
+    float ph = 0, vib = r.uniform(4.5f, 6.5f), vd = r.uniform(0.01f, 0.025f);
+    size_t len = (size_t)(dur * SR);
+    for (size_t i = 0; i < len && at + i < b.size(); i++) {
+        float t = i / (float)SR, u = t / dur;
+        float f = lerp(f0, f1, std::sqrt(u)) * (1 + vd * std::sin(2 * PI * vib * t));
+        ph += f / SR;
+        float saw = std::fmod(ph, 1.f) * 2 - 1 + n.white() * 0.25f;
+        float e = clamp01(t / 0.12f) * clamp01((dur - t) / (dur * 0.45f));
+        b[at + i] += lp(A(saw) * 1.2f + B(saw) * 0.7f) * e * amp;
+    }
+}
+
+Buf sfxApplause() {
+    Buf b = make(3.2f);
+    Rng r(808);
+    for (int c = 0; c < 22; c++) {
+        float t = r.uniform(0, 0.25f), rate = r.uniform(4.5f, 7.f), stop = r.uniform(1.6f, 2.9f);
+        float amp = r.uniform(0.4f, 1.f);
+        while (t < stop) {
+            addClap(b, (size_t)(t * SR), amp * clamp01((stop - t) / 0.8f), r);
+            t += 1 / rate * r.uniform(0.85f, 1.15f);
+        }
+    }
+    // a couple of whistles from the back
+    for (int w = 0; w < 2; w++) {
+        float start = r.uniform(0.3f, 1.2f), dur = r.uniform(0.5f, 0.8f);
+        float ph = 0;
+        for (size_t i = (size_t)(start * SR); i < (size_t)((start + dur) * SR) && i < b.size(); i++) {
+            float t = i / (float)SR - start, u = t / dur;
+            float f = (u < 0.3f ? lerp(1700, 2700, u / 0.3f) : lerp(2700, 2300, (u - 0.3f) / 0.7f)) * (1 + 0.012f * std::sin(t * 40));
+            ph += 2 * PI * f / SR;
+            b[i] += std::sin(ph) * clamp01(t / 0.04f) * clamp01((dur - t) / 0.15f) * 0.12f;
+        }
+    }
+    Noise n;
+    Biquad lp = Biquad::lp(1200);
+    for (size_t i = 0; i < b.size(); i++) b[i] += lp(n.pink()) * envAD(i / (float)SR, 0.2f, 1.2f) * 0.15f;
+    normalize(b, 0.5f);
+    return b;
+}
+
+Buf sfxCheer() {
+    Buf b = sfxApplause();
+    b.resize((size_t)(3.4f * SR), 0.f);
+    Rng r(4242);
+    for (int v = 0; v < 12; v++) {
+        float f0 = r.uniform(170, 330), up = r.uniform(1.25f, 1.6f);
+        bool ah = r.chance(0.5);
+        addVoice(b, (size_t)(r.uniform(0, 0.35f) * SR), r.uniform(1.1f, 1.8f), f0, f0 * up, ah ? 800 : 450, ah ? 1250 : 850,
+                 r.uniform(0.08f, 0.16f), r);
+    }
+    normalize(b, 0.6f);
+    return b;
+}
+
+Buf sfxGroan() {
+    Buf b = make(1.9f);
+    Rng r(1313);
+    for (int v = 0; v < 10; v++) {
+        float f0 = r.uniform(190, 300);
+        addVoice(b, (size_t)(r.uniform(0, 0.2f) * SR), r.uniform(1.2f, 1.6f), f0, f0 * r.uniform(0.62f, 0.75f), 500, 880,
+                 r.uniform(0.1f, 0.18f), r);
+    }
+    normalize(b, 0.38f);
+    return b;
+}
+
+Buf sfxKaching() {
+    Buf b = make(1.3f);
+    // drawer: a rattle sliding out, then the bell
+    Noise n;
+    Biquad bp = Biquad::bp(2600, 1.5f);
+    for (size_t i = 0; i < (size_t)(0.12f * SR); i++) {
+        float t = i / (float)SR;
+        b[i] += bp(n.white()) * envAD(t, 0.005f, 0.04f) * (0.6f + 0.4f * std::sin(t * 900)) * 0.6f;
+    }
+    addClick(b, (size_t)(0.11f * SR), 1800, 1.5f, 0.004f, 0.8f, 91);
+    size_t at = (size_t)(0.13f * SR);
+    addModes(b, at, {{2637, 0.55f}, {3951, 0.4f}, {5274, 0.3f}, {6650, 0.2f}, {7920, 0.12f}}, 0.22f);
+    addModes(b, at + (size_t)(0.07f * SR), {{3136, 0.5f}, {4700, 0.32f}, {6270, 0.22f}}, 0.16f);
+    normalize(b, 0.5f);
+    return b;
+}
+
+Buf sfxHeartbeat() {
+    Buf b = make(0.95f);
+    Noise n;
+    auto thump = [&](float at, float amp) {
+        float ph = 0;
+        Biquad lp = Biquad::lp(160);
+        for (size_t i = (size_t)(at * SR); i < b.size(); i++) {
+            float t = i / (float)SR - at;
+            if (t > 0.3f) break;
+            float f = 62 * std::exp(-t / 0.06f) + 38;
+            ph += 2 * PI * f / SR;
+            b[i] += (std::sin(ph) + lp(n.white()) * 0.6f) * envAD(t, 0.004f, 0.06f) * amp;
+        }
+    };
+    thump(0.0f, 1.f);
+    thump(0.26f, 0.7f);
+    normalize(b, 0.7f);
+    return b;
+}
+
+void snare(Buf& b, size_t at, float amp, Noise& n) {
+    Biquad hp = Biquad::hp(1800), bp = Biquad::bp(3800, 0.8f);
+    float ph = 0;
+    for (size_t i = at; i < b.size(); i++) {
+        float t = (i - at) / (float)SR;
+        if (t > 0.12f) break;
+        ph += 2 * PI * (190 + 40 * std::exp(-t / 0.01f)) / SR;
+        b[i] += (bp(hp(n.white())) * envAD(t, 0.0008f, 0.03f) + std::sin(ph) * envAD(t, 0.0008f, 0.018f) * 0.5f) * amp;
+    }
+}
+
+Buf sfxDrumroll() {
+    const float len = 1.0f;
+    Buf b = make(len + 0.15f);
+    Noise n;
+    Rng r(66);
+    const int strokes = 28;
+    for (int k = 0; k < strokes; k++)
+        snare(b, (size_t)(k * SR * len / strokes) + (size_t)r.uniform(0, 40), (k % 2 ? 0.75f : 1.f) * r.uniform(0.85f, 1.f), n);
+    // the ringing of the last strokes wraps around to the head so the loop is seamless
+    size_t L = (size_t)(len * SR);
+    for (size_t i = L; i < b.size(); i++) b[i - L] += b[i];
+    b.resize(L);
+    normalize(b, 0.42f);
+    return b;
+}
+
+Buf sfxCymbal() {
+    Buf b = make(2.6f);
+    Noise n;
+    Biquad hp = Biquad::hp(5000), bp = Biquad::bp(7000, 0.6f);
+    for (size_t i = 0; i < b.size(); i++) {
+        float t = i / (float)SR;
+        b[i] = (hp(n.white()) * 0.8f + bp(n.white()) * 0.5f) * envAD(t, 0.002f, 0.7f);
+    }
+    Rng r(5);
+    std::vector<std::pair<float, float>> modes;
+    for (int k = 0; k < 14; k++) modes.push_back({r.uniform(3000, 11000), r.uniform(0.3f, 1.2f)});
+    addModes(b, 0, modes, 0.04f);
+    Noise n2;
+    snare(b, 0, 0.8f, n2);
+    normalize(b, 0.45f);
+    return b;
+}
+
+Buf sfxGlass() {
+    Buf b = make(1.6f);
+    addClick(b, 0, 6500, 2, 0.002f, 0.5f, 17);
+    addModes(b, 0, {{2350, 0.9f}, {2365, 0.85f}, {3820, 0.55f}, {5150, 0.4f}, {6650, 0.25f}, {8300, 0.15f}}, 0.18f);
+    addModes(b, (size_t)(0.11f * SR), {{2480, 0.7f}, {4010, 0.45f}, {5400, 0.3f}}, 0.1f);
+    normalize(b, 0.4f);
+    return b;
+}
+
+Buf sfxRain() {
+    Buf b = make(6.5f);
+    Noise n;
+    Biquad lp = Biquad::lp(3500), hp = Biquad::hp(400), lp2 = Biquad::lp(900);
+    for (size_t i = 0; i < b.size(); i++) {
+        float t = i / (float)SR;
+        float m = 0.75f + 0.25f * std::sin(t * 0.9f + std::sin(t * 0.37f) * 2);
+        b[i] = hp(lp(n.white())) * 0.35f * m + lp2(n.pink()) * 0.4f;
+    }
+    Rng r(99);
+    for (int k = 0; k < 900; k++) addClick(b, (size_t)(r.uniform(0, 6.4f) * SR), r.uniform(2500, 8000), 3, 0.0012f, r.uniform(0.05f, 0.25f), 3000 + k);
+    makeLoopable(b, 0.4f);
+    normalize(b, 0.4f);
+    return b;
+}
+
+Buf sfxHit() {
+    Buf b = make(2.4f);
+    // brass stab
+    float chord[] = {41, 48, 53, 57, 60, 65, 69};
+    for (float m : chord) {
+        float hz = midiHz(m), ph = 0, ph2 = 0;
+        Biquad lp = Biquad::lp(3000);
+        for (size_t i = 0; i < b.size(); i++) {
+            float t = i / (float)SR;
+            if (i % 64 == 0) lp = Biquad::lp(600 + 4000 * envAD(t, 0.01f, 0.25f), 0.9f);
+            ph += hz / SR;
+            ph2 += hz * 1.006f / SR;
+            float s = (std::fmod(ph, 1.f) * 2 - 1) + (std::fmod(ph2, 1.f) * 2 - 1);
+            b[i] += lp(s) * envAD(t, 0.008f, 0.45f) * 0.1f;
+        }
+    }
+    // timpani
+    float ph = 0;
+    Noise n;
+    Biquad lp = Biquad::lp(400);
+    for (size_t i = 0; i < b.size(); i++) {
+        float t = i / (float)SR;
+        ph += 2 * PI * (88 + 20 * std::exp(-t / 0.05f)) / SR;
+        b[i] += (std::sin(ph) * 0.9f + lp(n.white()) * 0.5f) * envAD(t, 0.002f, 0.55f);
+    }
+    Buf cym = sfxCymbal();
+    for (size_t i = 0; i < b.size() && i < cym.size(); i++) b[i] += cym[i] * 0.5f;
+    normalize(b, 0.75f);
+    return b;
+}
+
+Buf sfxRiser() {
+    Buf b = make(1.7f);
+    Noise n;
+    Biquad bp;
+    float ph = 0;
+    for (size_t i = 0; i < b.size(); i++) {
+        float t = i / (float)SR, u = t / 1.7f;
+        if (i % 32 == 0) bp = Biquad::bp(300 * std::pow(20.f, u), 2.f);
+        ph += 2 * PI * (220 * std::pow(4.f, u)) / SR;
+        float e = u * u * clamp01((1.7f - t) / 0.05f);
+        b[i] = (bp(n.white()) * 1.4f + std::sin(ph) * 0.25f) * e;
+    }
+    normalize(b, 0.45f);
+    return b;
+}
+
+Buf sfxAchieve() {
+    Buf b = make(1.8f);
+    float notes[] = {76, 79, 83, 88};
+    for (int i = 0; i < 4; i++) addBell(b, (size_t)(i * 0.09f * SR), midiHz(notes[i]), 0.5f, 0.25f, 0.9f);
+    addBell(b, (size_t)(0.38f * SR), midiHz(91), 0.9f, 0.2f, 0.5f);
+    addBell(b, (size_t)(0.38f * SR), midiHz(95), 0.9f, 0.14f, 0.5f);
+    Rng r(3);
+    for (int k = 0; k < 14; k++) addModes(b, (size_t)(r.uniform(0.35f, 1.1f) * SR), {{r.uniform(5000, 9000), 0.08f}}, 0.04f);
+    normalize(b, 0.5f);
+    return b;
+}
+
+Buf sfxSparkle() {
+    Buf b = make(1.1f);
+    Rng r(21);
+    for (int k = 0; k < 16; k++) {
+        float t = k * 0.045f + r.uniform(0, 0.02f);
+        addBell(b, (size_t)(t * SR), midiHz((float)r.range(84, 100)), 0.15f, 0.12f * (1 - k / 20.f), 0.4f);
+    }
+    normalize(b, 0.35f);
+    return b;
+}
+
+// ---------------------------------------------------------------------------
 // Music
 // ---------------------------------------------------------------------------
 struct Track {
@@ -983,6 +1249,14 @@ void init() {
     g_sfx[SFX_BOOM] = sfxBoom();
     g_sfx[SFX_AMBIENCE] = sfxAmbience();
     g_sfx[SFX_KNOCK] = sfxKnock();
+    g_sfx[SFX_KACHING] = sfxKaching();
+    g_sfx[SFX_HEARTBEAT] = sfxHeartbeat();
+    g_sfx[SFX_GLASS] = sfxGlass();
+    g_sfx[SFX_RISER] = sfxRiser();
+    g_sfx[SFX_ACHIEVE] = sfxAchieve();
+    g_sfx[SFX_SPARKLE] = sfxSparkle();
+    g_sfx[SFX_DRUMROLL] = sfxDrumroll();
+    g_sfx[SFX_CYMBAL] = sfxCymbal();
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         SDL_Log("audio init failed: %s", SDL_GetError());
@@ -1003,6 +1277,19 @@ void init() {
     // Music takes a moment to synthesize, so it renders in the background.
     g_musicThread = std::thread([] {
         Uint64 t0 = SDL_GetPerformanceCounter();
+        {
+            Buf applause = sfxApplause(), cheer = sfxCheer(), groan = sfxGroan(), rain = sfxRain(), hit = sfxHit();
+            SDL_LockAudioDevice(g_dev);
+            g_sfx[SFX_APPLAUSE] = std::move(applause);
+            g_sfx[SFX_CHEER] = std::move(cheer);
+            g_sfx[SFX_GROAN] = std::move(groan);
+            g_sfx[SFX_RAIN] = std::move(rain);
+            g_sfx[SFX_HIT] = std::move(hit);
+            SDL_UnlockAudioDevice(g_dev);
+            SDL_Log("crowd sounds synthesized in %.0f ms", (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency());
+            if (g_quit) return;
+        }
+        t0 = SDL_GetPerformanceCounter();
         auto lounge = genLounge();
         SDL_Log("lounge music synthesized in %.0f ms", (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency());
         if (g_quit) return;

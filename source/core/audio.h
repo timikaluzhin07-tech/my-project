@@ -32,6 +32,19 @@ enum Sfx {
     SFX_BOOM,
     SFX_AMBIENCE,
     SFX_KNOCK,
+    SFX_APPLAUSE,
+    SFX_CHEER,
+    SFX_GROAN,
+    SFX_KACHING,
+    SFX_HEARTBEAT,
+    SFX_DRUMROLL,
+    SFX_CYMBAL,
+    SFX_GLASS,
+    SFX_RAIN,
+    SFX_HIT,
+    SFX_RISER,
+    SFX_ACHIEVE,
+    SFX_SPARKLE,
     SFX_COUNT
 };
 

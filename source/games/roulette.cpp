@@ -4,15 +4,19 @@
 
 #include "../art/art.h"
 #include "../art/backdrop.h"
+#include "../art/shade.h"
 #include "../art/svg.h"
 #include "../art/tableart.h"
 #include "../core/anim.h"
 #include "../core/app.h"
 #include "../core/audio.h"
+#include "../core/fx.h"
 #include "../core/gfx.h"
 #include "../core/input.h"
 #include "../core/save.h"
+#include "../core/trophy.h"
 #include "../core/ui.h"
+#include "quips.h"
 #include "roulette_logic.h"
 
 namespace {
@@ -45,90 +49,141 @@ const char* kRules =
     "У каждого игрока свой цвет фишек — как на настоящем столе.";
 
 // ---------------------------------------------------------------------------
+// The wheel is rendered at zoom resolution so it stays crisp while the ball runs.
+constexpr float WS = TEX_SCALE * ZSCALE;
+
+shade::Layer layer(const std::string& body, float D, const shade::Material& m, float bevel, float depth = 1.f) {
+    shade::Layer l;
+    l.svg = svg::open(D, D) + body + svg::close();
+    l.mat = m;
+    l.bevel = bevel;
+    l.depth = depth;
+    return l;
+}
+
+std::string ringPath(float c, float r0, float r1) {
+    auto circ = [c](float r, int sweep) {
+        return "M" + svg::num(c - r) + " " + svg::num(c) + " A" + svg::num(r) + " " + svg::num(r) + " 0 1 " + std::to_string(sweep) +
+               " " + svg::num(c + r) + " " + svg::num(c) + " A" + svg::num(r) + " " + svg::num(r) + " 0 1 " + std::to_string(sweep) +
+               " " + svg::num(c - r) + " " + svg::num(c) + " Z";
+    };
+    return circ(r1, 0) + " " + circ(r0, 1);
+}
+
 Image buildBowl() {
     float D = WR * 2, c = WR;
-    std::string s = svg::open(D, D) + "<defs>" +
-                    svg::radialU("rim", c, c, WR, {{0.88f, Color::hex(0x5a2e14)}, {0.95f, Color::hex(0x3a1b0b)}, {1, Color::hex(0x1e0d05)}}) +
-                    svg::radialU("track", c, c, WR * 0.92f,
-                                 {{0.74f, Color::hex(0x2c170b)}, {0.79f, Color::hex(0x6e4421)}, {0.9f, Color::hex(0xc29159)},
-                                  {0.97f, Color::hex(0xdcb07a)}, {1, Color::hex(0x8a5a2c)}}) +
-                    svg::linear("gold", 0, 0, 0, 1, {{0, Color::hex(0xfbe7a6)}, {0.5f, Color::hex(0xc99a3c)}, {1, Color::hex(0x8f6a22)}}) +
-                    "</defs>";
-    s += svg::circle(c, c, WR, svg::url("rim"));
-    s += svg::circle(c, c, WR - 3, "none", svg::stroke("#e0bb62", 2.2f, 0.9f));
-    s += svg::circle(c, c, WR * 0.92f, svg::url("track"));
-    s += svg::circle(c, c, WR * 0.92f, "none", svg::stroke("#e0bb62", 1.4f, 0.8f));
-    s += svg::circle(c, c, WR * 0.72f, "#140a05");
-    // deflector diamonds
+    std::vector<shade::Layer> L;
+    // lacquered mahogany rim, turned round
+    shade::Layer rim = layer(svg::circle(c, c, WR, "#5a2e14"), D, shade::mat::lacquer(), 16, 0.6f);
+    rim.paint = [c](Image& im) { art::woodGrain(im, c * ZSCALE, c * ZSCALE, Color::hex(0x2a1006), Color::hex(0x7e4620), 5, true); };
+    L.push_back(rim);
+    L.push_back(layer(svg::path(ringPath(c, WR - 7, WR - 4), "#e2b450", "fill-rule=\"evenodd\""), D, shade::mat::gold(), 1.5f));
+    Image img = shade::relief(D, D, L, WS);
+    // the ball track: polished maple sloping down into the bowl
+    {
+        float r0 = WR * 0.70f, r1 = WR * 0.92f;
+        Image tr = gfx::rasterSvg(svg::open(D, D) + svg::path(ringPath(c, r0, r1), "#c08a50", "fill-rule=\"evenodd\"") + svg::close(), WS);
+        art::woodGrain(tr, c * ZSCALE, c * ZSCALE, Color::hex(0x4a2a12), Color::hex(0xa8703c), 9, true);
+        std::vector<float> h((size_t)tr.w * tr.h);
+        for (int y = 0; y < tr.h; y++)
+            for (int x = 0; x < tr.w; x++) {
+                float r = std::hypot((x + 0.5f) / WS - c, (y + 0.5f) / WS - c);
+                float t = clamp01((r - r0) / (r1 - r0));
+                h[(size_t)y * tr.w + x] = t * t * (3 - 2 * t) * 0.6f + t * 0.4f;
+            }
+        shade::Material m = shade::mat::lacquer();
+        m.clearcoat = 0.35f;
+        m.exposure = 0.85f;
+        shade::shadeHeight(tr, h, (r1 - r0) * WS * 0.45f, m);
+        img.draw(tr, 0, 0);
+    }
+    // brass lip at the top of the track, deflectors (canoes) on the slope
+    std::vector<shade::Layer> M;
+    M.push_back(layer(svg::path(ringPath(c, WR * 0.915f, WR * 0.935f), "#e2b450", "fill-rule=\"evenodd\""), D, shade::mat::gold(), 1.6f));
+    std::string defl;
     for (int k = 0; k < 8; k++) {
         float a = k * PI / 4 + PI / 8;
         float x = c + std::cos(a) * WR * 0.785f, y = c + std::sin(a) * WR * 0.785f;
-        float len = WR * 0.045f, wid = WR * 0.018f;
+        float len = WR * 0.05f, wid = WR * 0.02f;
         float tx = -std::sin(a), ty = std::cos(a);
         bool along = k % 2 == 0;
         float ax = along ? tx : std::cos(a), ay = along ? ty : std::sin(a);
         float bx = -ay, by = ax;
-        std::string d = "M" + svg::num(x + ax * len) + " " + svg::num(y + ay * len) + " L" + svg::num(x + bx * wid) + " " +
-                        svg::num(y + by * wid) + " L" + svg::num(x - ax * len) + " " + svg::num(y - ay * len) + " L" +
-                        svg::num(x - bx * wid) + " " + svg::num(y - by * wid) + " Z";
-        s += svg::path(d, svg::url("gold"), svg::stroke("#6a4a14", 0.6f));
+        defl += svg::path("M" + svg::num(x + ax * len) + " " + svg::num(y + ay * len) + " L" + svg::num(x + bx * wid) + " " +
+                              svg::num(y + by * wid) + " L" + svg::num(x - ax * len) + " " + svg::num(y - ay * len) + " L" +
+                              svg::num(x - bx * wid) + " " + svg::num(y - by * wid) + " Z",
+                          "#e8c060");
     }
-    s += svg::close();
-    Image img = gfx::rasterSvg(s);
-    img.grain(0.04f, 3, 6);
+    shade::Layer dl = layer(defl, D, shade::mat::gold(), 3.5f, 1.2f);
+    dl.shadow = 2;
+    dl.shadowOpacity = 0.6f;
+    M.push_back(dl);
+    M.push_back(layer(svg::circle(c, c, WR * 0.70f, "#0e0704"), D, shade::mat::lacquer(), 1));
+    img.draw(shade::relief(D, D, M, WS), 0, 0);
+    shade::glints(img, 6, 31, 9 * WS);
     return img;
 }
 
+// Rotating part: numbers, pockets and frets.
 Image buildRotor() {
     float Rr = WR * R_ROTOR, D = Rr * 2, c = Rr;
-    std::string s = svg::open(D, D) + "<defs>" +
-                    svg::radialU("cone", c, c, WR * 0.47f, {{0.3f, Color::hex(0xb27a3e)}, {0.8f, Color::hex(0x6a3c18)}, {1, Color::hex(0x3a1e0a)}}) +
-                    svg::radialU("tur", c - 6, c - 6, WR * 0.17f, {{0, Color::hex(0xfff2c0)}, {0.6f, Color::hex(0xd2a84a)}, {1, Color::hex(0x7a5418)}}) +
-                    svg::linear("arm", 0, 0, 1, 1, {{0, Color::hex(0xfbe7a6)}, {0.5f, Color::hex(0xc99a3c)}, {1, Color::hex(0x8f6a22)}}) +
-                    "</defs>";
     const int* order = wheelOrder();
     float rNumIn = WR * 0.585f, rNumOut = WR * 0.695f, rPocketIn = WR * 0.47f;
+    std::string nums, pockets, frets;
     for (int i = 0; i < POCKETS; i++) {
         float a0 = pocketAngle(i) - PI / POCKETS, a1 = pocketAngle(i) + PI / POCKETS;
         int n = order[i];
-        const char* col = n == 0 ? "#127a45" : (isRed(n) ? "#b01a2c" : "#17151a");
-        const char* deep = n == 0 ? "#0a4a28" : (isRed(n) ? "#5e0c16" : "#0b0a0d");
-        s += svg::path(svg::sector(c, c, rNumIn, rNumOut, a0, a1), col);
-        s += svg::path(svg::sector(c, c, rPocketIn, rNumIn, a0, a1), deep);
+        const char* col = n == 0 ? "#138048" : (isRed(n) ? "#b51a2e" : "#1a181e");
+        const char* deep = n == 0 ? "#0c5a32" : (isRed(n) ? "#7a1020" : "#121116");
+        nums += svg::path(svg::sector(c, c, rNumIn, rNumOut, a0, a1), col);
+        float g = 1.3f / rNumIn;
+        pockets += svg::path(svg::sector(c, c, rPocketIn + 1.5f, rNumIn - 1, a0 + g, a1 - g), deep);
+        float a = a0;
+        frets += svg::line(c + std::cos(a) * rPocketIn, c + std::sin(a) * rPocketIn, c + std::cos(a) * rNumOut,
+                           c + std::sin(a) * rNumOut, "#d8dae2", 1.8f);
     }
-    for (int i = 0; i < POCKETS; i++) {
-        float a = pocketAngle(i) - PI / POCKETS;
-        s += svg::line(c + std::cos(a) * rPocketIn, c + std::sin(a) * rPocketIn, c + std::cos(a) * rNumOut,
-                       c + std::sin(a) * rNumOut, "#e3c46d", 1.1f, 0.95f);
-    }
-    s += svg::circle(c, c, rNumOut, "none", svg::stroke("#e3c46d", 1.6f));
-    s += svg::circle(c, c, rNumIn, "none", svg::stroke("#e3c46d", 1.2f));
-    s += svg::circle(c, c, rPocketIn, svg::url("cone"), svg::stroke("#e3c46d", 1.6f));
-    for (int k = 0; k < 8; k++) {
-        float a = k * PI / 4;
-        s += svg::line(c + std::cos(a) * WR * 0.2f, c + std::sin(a) * WR * 0.2f, c + std::cos(a) * WR * 0.44f,
-                       c + std::sin(a) * WR * 0.44f, "#2a1405", 1.2f, 0.4f);
-    }
-    // turret with the four-arm spinner
-    float arm = WR * 0.33f, aw = WR * 0.028f;
-    s += svg::rect(c - arm, c - aw, arm * 2, aw * 2, aw, svg::url("arm"), svg::stroke("#6a4a14", 0.6f));
-    s += svg::rect(c - aw, c - arm, aw * 2, arm * 2, aw, svg::url("arm"), svg::stroke("#6a4a14", 0.6f));
-    for (int k = 0; k < 4; k++) {
-        float a = k * PI / 2;
-        s += svg::circle(c + std::cos(a) * arm, c + std::sin(a) * arm, aw * 1.9f, svg::url("tur"), svg::stroke("#6a4a14", 0.6f));
-    }
-    s += svg::circle(c, c, WR * 0.12f, svg::url("tur"), svg::stroke("#6a4a14", 0.8f));
-    s += svg::circle(c, c, WR * 0.05f, svg::url("arm"));
-    s += svg::close();
-    Image img = gfx::rasterSvg(s);
+    frets += svg::path(ringPath(c, rNumOut - 1.2f, rNumOut + 0.6f), "#d8dae2", "fill-rule=\"evenodd\"");
+    frets += svg::path(ringPath(c, rNumIn - 0.9f, rNumIn + 0.9f), "#d8dae2", "fill-rule=\"evenodd\"");
+    std::vector<shade::Layer> L;
+    // pocket floor under everything
+    L.push_back(layer(svg::circle(c, c, rNumIn, "#060405"), D, shade::mat::gloss(), 1, 0.5f));
+    shade::Layer nl = layer(nums, D, shade::mat::gloss(), 2.5f, 0.6f);
     float rText = WR * 0.64f;
-    for (int i = 0; i < POCKETS; i++) {
-        Image m = gfx::textMask(std::to_string(order[i]), F_NUM, 12.5f, TEX_SCALE);
-        float a = pocketAngle(i);
-        img.drawRotated(m, (c + std::cos(a) * rText) * TEX_SCALE, (c + std::sin(a) * rText) * TEX_SCALE, a + PI / 2,
-                        Color::hex(0xf6efe0));
-    }
-    return img;
+    nl.paint = [order, c, rText](Image& im) {
+        for (int i = 0; i < POCKETS; i++) {
+            Image m = gfx::textMask(std::to_string(order[i]), F_NUM, 12.5f, WS);
+            float a = pocketAngle(i);
+            im.drawRotated(m, (c + std::cos(a) * rText) * WS, (c + std::sin(a) * rText) * WS, a + PI / 2, Color::hex(0xf6efe0));
+        }
+    };
+    L.push_back(nl);
+    L.push_back(layer(pockets, D, shade::mat::gloss(), 3.5f, -0.9f));
+    L.push_back(layer(frets, D, shade::mat::silver(), 0.9f, 1.2f));
+    return shade::relief(D, D, L, WS);
+}
+
+// Static (rotationally symmetric) centre: turned wooden cone with a brass collar.
+Image buildCone() {
+    float rPocketIn = WR * 0.47f, D = rPocketIn * 2 + 4, c = D / 2;
+    std::vector<shade::Layer> L;
+    shade::Layer cone = layer(svg::circle(c, c, rPocketIn - 1, "#7a4420"), D, shade::mat::lacquer(), rPocketIn * 0.95f, 0.32f);
+    cone.paint = [c](Image& im) { art::woodGrain(im, c * ZSCALE, c * ZSCALE, Color::hex(0x3a1a08), Color::hex(0xa0602c), 13, true); };
+    L.push_back(cone);
+    L.push_back(layer(svg::path(ringPath(c, rPocketIn - 3.5f, rPocketIn), "#e2b450", "fill-rule=\"evenodd\""), D, shade::mat::gold(), 1.6f));
+    L.push_back(layer(svg::path(ringPath(c, WR * 0.2f, WR * 0.215f), "#e2b450", "fill-rule=\"evenodd\""), D, shade::mat::gold(), 0.8f));
+    return shade::relief(D, D, L, WS);
+}
+
+// Spinner arms (rotate with the rotor; knobs and cap are drawn as static spheres).
+Image buildArms() {
+    float arm = WR * 0.33f, aw = WR * 0.026f, D = arm * 2 + 8, c = D / 2;
+    std::vector<shade::Layer> L;
+    shade::Layer a = layer(svg::rect(c - arm, c - aw, arm * 2, aw * 2, aw, "#e2b450") + svg::rect(c - aw, c - arm, aw * 2, arm * 2, aw, "#e2b450"),
+                           D, shade::mat::gold(), aw, 1.f);
+    a.shadow = 3;
+    a.shadowOpacity = 0.55f;
+    L.push_back(a);
+    return shade::relief(D, D, L, WS);
 }
 
 Image buildLayout(const Grid& g) {
@@ -136,9 +191,6 @@ Image buildLayout(const Grid& g) {
     std::string s = svg::open(SCREEN_W, SCREEN_H) + "<defs>" +
                     svg::linear("wood", 0, 0, 0, 1, {{0, Color::hex(0x5a3519)}, {1, Color::hex(0x2a160a)}}) +
                     svg::radialU("pit", WX, WY, WR + 26, {{0.85f, Color::hex(0x000000)}, {1, Color::hex(0x000000)}}) + "</defs>";
-    // wooden rim along the top and bottom of the table
-    s += svg::rect(0, 0, SCREEN_W, 18, 0, svg::url("wood"));
-    s += svg::rect(0, 17, SCREEN_W, 1.6f, 0, "#b08a3a");
     std::string W = "#f2ead6";
     float lw = 1.8f;
     // zero
@@ -183,6 +235,20 @@ Image buildLayout(const Grid& g) {
     for (int k = 0; k < 6; k++)
         if (ev[k][0]) art::stampText(img, ev[k], g.x0 + (2 * k + 1) * g.cw, g.bottom() + g.dozenH + g.evenH / 2, F_SERIF, 18, ink);
     art::stampText(img, "ROULETTE", 1062, 120, F_TITLE, 13, Color::hex(0xe4c66c, 150));
+    art::feltLight(img, 760, 320, 700, 420, [](float, float y) { return y - 20.f; }, 26, 0.7f);
+    // lacquered wooden edge with a brass trim
+    std::vector<shade::Layer> L(2);
+    L[0].svg = svg::rect(-40, -40, SCREEN_W + 80, 60, 0, "#6a3a1a");
+    L[0].mat = shade::mat::lacquer();
+    L[0].bevel = 6;
+    L[0].depth = 0.7f;
+    L[0].shadow = 5;
+    L[0].shadowOpacity = 0.6f;
+    L[0].paint = [](Image& im) { art::woodGrain(im, 0, 0, Color::hex(0x2a1208), Color::hex(0x8a4e24), 78, false); };
+    L[1].svg = svg::rect(-40, 15, SCREEN_W + 80, 3, 0, "#e2b450");
+    L[1].mat = shade::mat::gold();
+    L[1].bevel = 1.3f;
+    img.draw(art::regionRelief(0, 0, SCREEN_W, 34, L), 0, 0);
     img.vignette(0.45f, 0.4f);
     return img;
 }
@@ -204,9 +270,14 @@ class RouletteScene : public Scene {
 public:
     RouletteScene() {
         spots_ = buildSpots(grid_);
-        bg_ = gfx::upload(buildLayout(grid_));
-        bowl_ = gfx::upload(buildBowl());
-        rotor_ = gfx::upload(buildRotor());
+        bg_ = gfx::upload(art::cached("roulette.layout", [this] { return buildLayout(grid_); }));
+        bowl_ = gfx::upload(art::cached("roulette.bowl", buildBowl), WS);
+        rotor_ = gfx::upload(art::cached("roulette.rotor", buildRotor), WS);
+        cone_ = gfx::upload(art::cached("roulette.cone", buildCone), WS);
+        arms_ = gfx::upload(art::cached("roulette.arms", buildArms), WS);
+        knob_ = gfx::upload(shade::sphere(WR * 0.05f, Color::hex(0xe6b850), shade::mat::gold(), WS), WS);
+        cap_ = gfx::upload(shade::sphere(WR * 0.1f, Color::hex(0xe6b850), shade::mat::gold(), WS), WS);
+        ball_ = gfx::upload(shade::sphere(WR * 0.032f, Color::hex(0xf4f0e6), shade::mat::ivory(), WS), WS);
         art::ensureBuilt();
         int redSpot = 0;
         for (int i = 0; i < (int)spots_.size(); i++)
@@ -226,6 +297,7 @@ public:
 
     ~RouletteScene() override {
         if (ballLoop_) audio::stopLoop(ballLoop_, 0.05f);
+        audio::stopLoop(rollLoop_, 0.05f);
     }
 
     void update(float dt) override {
@@ -385,6 +457,7 @@ private:
                 if (bounce != lastBounce_ && bounce < 4) {
                     lastBounce_ = bounce;
                     audio::play(audio::SFX_BALL_CLACK, 0.8f * (1 - b), 0, 0.9f + rng().uniform(0, 0.2f));
+                    input::rumble(ANY_PAD, 0.32f * (1 - b), 0.05f);
                 }
             }
             ballR_ = r;
@@ -403,6 +476,8 @@ private:
         audio::stopLoop(ballLoop_, 0.4f);
         ballLoop_ = 0;
         audio::play(audio::SFX_BALL_CLACK, 0.9f);
+        input::rumble(ANY_PAD, 0.3f, 0.06f);
+        if (!rollLoop_) rollLoop_ = audio::loop(audio::SFX_DRUMROLL, 0.32f);
         phi0_ = wrapAngle(ballAngle_ - rotorAngle_);
         float target = pocketAngle(pocketIndex(result_));
         float d = std::fmod(phi0_ - target, 2 * PI);
@@ -421,6 +496,10 @@ private:
         if (history_.size() > 12) history_.pop_back();
         caption_.say(std::to_string(result_) + ", " + std::string(colorName(result_)), 3);
         audio::play(audio::SFX_KNOCK, 0.9f);
+        audio::stopLoop(rollLoop_, 0.05f);
+        rollLoop_ = 0;
+        audio::play(audio::SFX_CYMBAL, 0.5f);
+        input::rumble(ANY_PAD, 0.4f, 0.18f);
         seq_.wait(1.9f);
         seq_.then(0.01f, [this] { payout(); });
     }
@@ -437,6 +516,8 @@ private:
                 p.returned += ret;
                 if (ret > 0) {
                     anyWin = true;
+                    if (result_ == 0) trophy::unlock(p.profile, trophy::ZERO);
+                    if (sp.numbers.size() == 1) trophy::unlock(p.profile, trophy::BULLSEYE);
                     FlyingChips f = chipFlight(p, BANK_X, BANK_Y, sp.x, sp.y, 0.3f + delay, 3);
                     flying_.push_back(f);
                     FlyingChips back = chipFlight(p, sp.x, sp.y, plateX(plate), 600, 1.2f + delay, 4);
@@ -449,14 +530,49 @@ private:
             }
             i64 net = p.returned - p.staked;
             save::player(p.profile).balance += p.returned;
-            if (p.staked > 0) save::recordResult(p.profile, net);
+            if (p.staked > 0) {
+                save::recordResult(p.profile, net);
+                trophy::unlock(p.profile, trophy::FIRST_GAME);
+                int betting = 0;
+                for (auto& q : players_) betting += q.staked > 0;
+                if (betting >= 3) trophy::unlock(p.profile, trophy::COMPANY);
+                jackpot::feed(p.staked);
+            }
+            trophy::checkBalance(p.profile);
             biggest = std::max(biggest, net);
             p.bets.clear();
         }
         save::store();
         audio::play(audio::SFX_CHIPS, 0.8f);
-        if (biggest >= 3000) { audio::play(audio::SFX_BIGWIN, 0.7f); banner_.show("КРУПНЫЙ ВЫИГРЫШ", "+" + fmtMoney(biggest), 2.2f); }
-        else if (anyWin) audio::play(audio::SFX_WIN, 0.8f);
+        if (biggest >= 3000) {
+            audio::play(audio::SFX_BIGWIN, 0.7f);
+            banner_.show("КРУПНЫЙ ВЫИГРЫШ", "+" + fmtMoney(biggest), 2.2f);
+            audio::play(audio::SFX_CHEER, 0.55f);
+            fx::coins(40, 0.8f);
+            fx::shake(0.3f);
+        } else if (anyWin) audio::play(audio::SFX_WIN, 0.8f);
+        if (anyWin) audio::play(audio::SFX_KACHING, 0.45f);
+        // sparks over the winning number on the layout
+        {
+            float wx = grid_.x0 - grid_.zeroW / 2, wy = grid_.y0 + 1.5f * grid_.ch;
+            for (int c = 0; c < 12; c++)
+                for (int r = 0; r < 3; r++)
+                    if (numberAt(c, r) == result_) { wx = grid_.cellX(c) + grid_.cw / 2; wy = grid_.rowY(r) + grid_.ch / 2; }
+            Color wc = result_ == 0 ? Color::hex(0x4fd18b) : (isRed(result_) ? Color::hex(0xff5060) : Color::hex(0xffd060));
+            fx::burst(wx, wy, 30, wc, 360);
+            fx::shockwave(wx, wy, wc, 110, 0.55f);
+        }
+        // the croupier comments on zeros, repeats and streaks
+        if (result_ == 0) caption_.say(quips::pick(quips::ROULETTE_ZERO), 3);
+        else if (history_.size() >= 2 && history_[1] == result_) caption_.say(strf(quips::pick(quips::ROULETTE_REPEAT).c_str(), result_), 3);
+        else {
+            int streak = 0;
+            for (int n : history_) {
+                if (n == 0 || isRed(n) != isRed(result_)) break;
+                streak++;
+            }
+            if (streak >= 3) caption_.say(strf(quips::pick(quips::ROULETTE_STREAK).c_str(), isRed(result_) ? "Красное" : "Чёрное", streak), 3);
+        }
         phase_ = CLEANUP;
         showNet_ = true;
         seq_.wait(2.6f);
@@ -485,26 +601,34 @@ private:
     // ====================================================================== drawing
     void drawWheel(float ze) {
         float cx = lerp(WX, ZX, ze), cy = lerp(WY, ZY, ze), sc = lerp(1.f, ZSCALE, ze);
-        gfx::glow(cx + 5, cy + 10, (WR + 30) * sc, pal::black, 0.75f, false);
+        gfx::glow(cx + 6, cy + 14, (WR + 34) * sc, pal::black, 0.8f, false);
         gfx::drawCentered(bowl_, cx, cy, sc);
-        gfx::drawCentered(rotor_, cx, cy, sc, rotorAngle_ * 180 / PI);
-        // warm highlight on the polished track
-        gfx::glowEllipse(cx - WR * 0.3f * sc, cy - WR * 0.35f * sc, WR * 0.5f * sc, WR * 0.35f * sc, Color::hex(0xfff2d0), 0.12f);
+        float deg = rotorAngle_ * 180 / PI;
+        gfx::drawCentered(rotor_, cx, cy, sc, deg);
+        gfx::drawCentered(cone_, cx, cy, sc);
+        gfx::drawCentered(arms_, cx, cy, sc, deg);
+        float arm = WR * 0.33f * sc;
+        for (int k = 0; k < 4; k++) {
+            float a = rotorAngle_ + k * PI / 2;
+            gfx::drawCentered(knob_, cx + std::cos(a) * arm, cy + std::sin(a) * arm, sc);
+        }
+        gfx::drawCentered(cap_, cx, cy, sc);
+        // soft overhead lamp reflected on the lacquer
+        gfx::glowEllipse(cx - WR * 0.3f * sc, cy - WR * 0.38f * sc, WR * 0.5f * sc, WR * 0.3f * sc, Color::hex(0xfff2d0), 0.07f);
         if (ballPhase_ > 0) {
             float r = ballR_ * WR * sc;
             float bx = cx + std::cos(ballAngle_) * r, by = cy + std::sin(ballAngle_) * r;
             float br = WR * 0.032f * sc;
-            gfx::circle(bx + br * 0.35f, by + br * 0.45f, br * 1.05f, Color(0, 0, 0, 120));
-            gfx::circle(bx, by, br, Color::hex(0xf4f2ee));
-            gfx::circle(bx - br * 0.32f, by - br * 0.35f, br * 0.38f, Color(255, 255, 255, 230));
             if (ballPhase_ == 1) {
-                // motion streak
+                // motion blur trail
                 float tr = ballSpeed_ > 0 ? -1.f : 1.f;
-                for (int k = 1; k <= 4; k++) {
-                    float a = ballAngle_ + tr * k * 0.03f * std::fabs(ballSpeed_) / 10.f;
-                    gfx::circle(cx + std::cos(a) * r, cy + std::sin(a) * r, br * (1 - k * 0.18f), Color(255, 255, 255, (uint8_t)(70 - k * 15)));
+                for (int k = 6; k >= 1; k--) {
+                    float a = ballAngle_ + tr * k * 0.022f * std::fabs(ballSpeed_) / 10.f;
+                    gfx::drawCentered(ball_, cx + std::cos(a) * r, cy + std::sin(a) * r, sc * (1 - k * 0.08f), 0, 0.28f - k * 0.04f);
                 }
             }
+            gfx::circle(bx + br * 0.4f, by + br * 0.55f, br * 1.05f, Color(0, 0, 0, 110));
+            gfx::drawCentered(ball_, bx, by, sc);
         }
         if (phase_ == RESULT || phase_ == CLEANUP) {
             float a = rotorAngle_ + pocketAngle(pocketIndex(result_));
@@ -668,7 +792,7 @@ private:
 
     Grid grid_;
     std::vector<Spot> spots_;
-    Tex bg_, bowl_, rotor_;
+    Tex bg_, bowl_, rotor_, cone_, arms_, knob_, cap_, ball_;
     std::vector<Player> players_;
     std::vector<FlyingChips> flying_;
     std::vector<int> history_;
@@ -682,6 +806,7 @@ private:
     float dropT_ = 0, dropDur_ = 2.4f, phi0_ = 0, delta_ = 0;
     int lastBounce_ = -1;
     int ballLoop_ = 0;
+    int rollLoop_ = 0;
     int result_ = 0;
     float resultT_ = 0;
     float zoom_ = 0;

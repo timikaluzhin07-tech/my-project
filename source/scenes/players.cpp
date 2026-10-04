@@ -7,6 +7,7 @@
 #include "../core/input.h"
 #include "../core/platform.h"
 #include "../core/save.h"
+#include "../core/trophy.h"
 #include "../core/ui.h"
 
 namespace {
@@ -139,7 +140,8 @@ private:
         float bw = gfx::textWidth(fmtMoney(p.balance), F_NUM, 30);
         gfx::text("фишек", x + 118 + bw, y + 108, F_SANS, 16, pal::muted, -1, a);
         std::string stats = "Лучший выигрыш: " + fmtMoney(p.biggestWin);
-        if (p.refills) stats += strf("  ·  Касса: %d", p.refills);
+        gfx::text(strf("Трофеи %d/%d", trophy::count(i), (int)trophy::COUNT), x + w - 16, y + 142, F_SANS, 14, pal::goldLight, 1, a);
+        if (p.refills) stats += strf(" · Касса: %d", p.refills);
         gfx::text(stats, x + 112, y + 142, F_SANS, 15, pal::muted, -1, a);
         gfx::text(playerColorName(p.color), x + w - 16, y + 40, F_SANS, 14, playerColor(p.color).scaled(1.3f), 1, a);
     }

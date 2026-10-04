@@ -50,6 +50,10 @@ int padForSeat(int seatOrder);
 // that closed a menu also triggering the screen underneath).
 void consume();
 
+// Vibration (HD Rumble on Switch). strength 0..1, fades out over `seconds`.
+// pad == ANY_PAD rumbles every connected controller. Respects the settings toggle.
+void rumble(int pad, float strength, float seconds);
+
 // Test harness: force a button mask on a virtual pad for the next frames.
 void inject(int pad, u32 heldMask);
 

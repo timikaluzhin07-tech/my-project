@@ -7,6 +7,9 @@
 namespace ui {
 
 void panel(float x, float y, float w, float h, float alpha = 1.f, bool gold = true);
+// Smaller lacquered plate (name tags, HUD boxes); highlight = gold rim.
+void plate(float x, float y, float w, float h, bool highlight = false, float alpha = 1.f);
+void releaseSkin();
 // Thin double gold rule with diamond ends — section separators.
 void rule(float cx, float y, float w, float alpha = 1.f);
 void buttonGlyph(u32 btn, float cx, float cy, float size = 22.f, float alpha = 1.f);

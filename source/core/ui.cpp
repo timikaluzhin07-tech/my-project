@@ -2,23 +2,92 @@
 
 #include <cstring>
 
+#include "../art/shade.h"
+#include "../art/svg.h"
 #include "app.h"
 #include "audio.h"
+#include "fx.h"
 #include "save.h"
 
 namespace ui {
 
-void panel(float x, float y, float w, float h, float alpha, bool gold) {
-    gfx::roundRect(x + 2, y + 5, w, h, 10, Color(0, 0, 0, 90).alpha(alpha));
-    gfx::roundRect(x, y, w, h, 9, Color(14, 12, 17, 236).alpha(alpha));
-    gfx::rectGrad(x + 6, y + 2, w - 12, std::min(h * 0.5f, 60.f), Color(255, 255, 255, 14).alpha(alpha),
-                  Color(255, 255, 255, 0));
-    if (gold) {
-        gfx::roundRectOutline(x, y, w, h, 9, 1.4f, pal::gold.alpha(0.7f * alpha));
-        gfx::roundRectOutline(x + 4, y + 4, w - 8, h - 8, 6, 0.8f, pal::goldDark.alpha(0.55f * alpha));
-    } else {
-        gfx::roundRectOutline(x, y, w, h, 9, 1.f, Color(255, 255, 255, 40).alpha(alpha));
+namespace {
+
+struct Skin {
+    Tex panel, plain, plate, plateHi;
+    bool built = false;
+};
+Skin g_skin;
+
+Image skinImage(float S, float r, Color body, float rimW, Color rim, const shade::Material& rimMat, bool corners) {
+    std::vector<shade::Layer> L;
+    shade::Layer b;
+    b.svg = svg::open(S, S) + "<defs>" +
+            svg::linear("bd", 0, 0, 0, 1, {{0, body.scaled(1.45f)}, {0.5f, body}, {1, body.scaled(0.7f)}}) + "</defs>" +
+            svg::rect(1, 1, S - 2, S - 2, r, svg::url("bd")) + svg::close();
+    b.mat = shade::mat::lacquer();
+    b.mat.exposure = 0.9f;
+    b.bevel = 3.5f;
+    b.depth = 0.4f;
+    b.grain = 0.025f;
+    L.push_back(b);
+    shade::Layer rimL;
+    float in = rimW / 2 + 1.2f;
+    rimL.svg = svg::open(S, S) + svg::rect(in, in, S - in * 2, S - in * 2, r - in + 1, "none", svg::stroke(rim.css(), rimW)) + svg::close();
+    rimL.mat = rimMat;
+    rimL.bevel = rimW * 0.55f;
+    rimL.depth = 1.f;
+    L.push_back(rimL);
+    if (corners) {
+        shade::Layer c;
+        std::string d = svg::open(S, S);
+        float o = 9;
+        for (auto p : std::vector<std::pair<float, float>>{{o, o}, {S - o, o}, {o, S - o}, {S - o, S - o}})
+            d += svg::path("M" + svg::num(p.first) + " " + svg::num(p.second - 3.2f) + " L" + svg::num(p.first + 3.2f) + " " +
+                               svg::num(p.second) + " L" + svg::num(p.first) + " " + svg::num(p.second + 3.2f) + " L" +
+                               svg::num(p.first - 3.2f) + " " + svg::num(p.second) + " Z",
+                           rim.css());
+        d += svg::rect(in + 4, in + 4, S - (in + 4) * 2, S - (in + 4) * 2, r - in - 3, "none", svg::stroke(rim.css(), 0.7f, 0.8f));
+        c.svg = d + svg::close();
+        c.mat = rimMat;
+        c.bevel = 0.8f;
+        L.push_back(c);
     }
+    return shade::relief(S, S, L);
+}
+
+void buildSkin() {
+    if (g_skin.built) return;
+    g_skin.built = true;
+    Color gold = Color::hex(0xe2b450);
+    shade::Material g = shade::mat::gold();
+    shade::Material steel = shade::mat::silver();
+    steel.exposure = 0.55f;
+    g_skin.panel = gfx::upload(skinImage(72, 11, Color::hex(0x16121a), 2.4f, gold, g, true));
+    g_skin.plain = gfx::upload(skinImage(72, 11, Color::hex(0x141218), 1.6f, Color::hex(0x8a8790), steel, false));
+    g_skin.plate = gfx::upload(skinImage(48, 9, Color::hex(0x121015), 1.5f, Color::hex(0x6f6a62), steel, false));
+    g_skin.plateHi = gfx::upload(skinImage(48, 9, Color::hex(0x1c1610), 2.f, gold, g, false));
+}
+
+} // namespace
+
+void releaseSkin() {
+    g_skin = Skin();
+}
+
+void panel(float x, float y, float w, float h, float alpha, bool gold) {
+    buildSkin();
+    gfx::roundRect(x + 3, y + 7, w, h, 12, Color(0, 0, 0, 110).alpha(alpha));
+    gfx::nine(gold ? g_skin.panel : g_skin.plain, x, y, w, h, 20, alpha);
+    // glassy sheen on the upper half
+    gfx::rectGrad(x + 10, y + 5, w - 20, std::min(h * 0.45f, 54.f), Color(255, 255, 255, 16).alpha(alpha), Color(255, 255, 255, 0));
+}
+
+void plate(float x, float y, float w, float h, bool highlight, float alpha) {
+    buildSkin();
+    gfx::roundRect(x + 2, y + 4, w, h, 9, Color(0, 0, 0, 100).alpha(alpha));
+    gfx::nine(highlight ? g_skin.plateHi : g_skin.plate, x, y, w, h, 14, alpha);
+    gfx::rectGrad(x + 8, y + 3, w - 16, h * 0.42f, Color(255, 255, 255, 14).alpha(alpha), Color(255, 255, 255, 0));
 }
 
 void rule(float cx, float y, float w, float alpha) {
@@ -110,13 +179,8 @@ void playerTag(int profile, float x, float y, float w, bool highlight, float alp
                bool showBalance) {
     const Profile& p = save::player(profile);
     float h = 48;
-    gfx::roundRect(x, y, w, h, 7, Color(10, 9, 12, highlight ? 235 : 200).alpha(alpha));
-    if (highlight) {
-        gfx::roundRectOutline(x - 1, y - 1, w + 2, h + 2, 8, 2, pal::gold.alpha(alpha));
-        gfx::glowEllipse(x + w / 2, y + h / 2, w * 0.7f, h * 1.2f, pal::gold, 0.12f * alpha);
-    } else {
-        gfx::roundRectOutline(x, y, w, h, 7, 1, Color(255, 255, 255, 36).alpha(alpha));
-    }
+    if (highlight) gfx::glowEllipse(x + w / 2, y + h / 2, w * 0.7f, h * 1.2f, pal::gold, 0.14f * alpha);
+    plate(x, y, w, h, highlight, alpha);
     chipDot(x + 20, y + h / 2, 10, playerColor(p.color).alpha(alpha));
     float tx = x + 38;
     gfx::text(p.name, tx, y + 16, F_SANS_BOLD, 17, pal::ivory, -1, alpha);
@@ -344,6 +408,10 @@ void Banner::render(float cx, float cy, float size) {
     float s = size * sc;
     if (gold) gfx::textGold(text, cx, cy, F_TITLE, s, 0, a);
     else gfx::textShadow(text, cx, cy, F_TITLE, s, color, 0, a);
+    if (gold) {
+        float tw = gfx::textWidth(text, F_TITLE, s);
+        fx::shine(cx - tw / 2 - 10, cy - s * 0.5f, tw + 20, s, clamp01((t - 0.3f) / 0.7f), 0.4f * a);
+    }
     if (!sub.empty()) gfx::textShadow(sub, cx, cy + size * 0.78f, F_SANS_BOLD, size * 0.38f, pal::ivory, 0, a);
 }
 

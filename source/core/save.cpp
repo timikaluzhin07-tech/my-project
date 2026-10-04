@@ -71,6 +71,7 @@ void load() {
             else if (f2 == "won") p.totalWon = n;
             else if (f2 == "lost") p.totalLost = n;
             else if (f2 == "refills") p.refills = (int)n;
+            else if (f2 == "trophies") p.trophies = (uint32_t)n;
         } else if (k == "master") s.master = std::clamp(f, 0.f, 1.f);
         else if (k == "music") s.music = std::clamp(f, 0.f, 1.f);
         else if (k == "sfx") s.sfx = std::clamp(f, 0.f, 1.f);
@@ -82,6 +83,9 @@ void load() {
         else if (k == "slotTurbo") s.slotTurbo = n != 0;
         else if (k == "slotBet") s.slotBet = std::clamp((int)n, 0, 7);
         else if (k == "slotRotate") s.slotRotate = n != 0;
+        else if (k == "effects") s.effects = n != 0;
+        else if (k == "jackpot") g_data.jackpot = std::max<i64>(50000, n);
+        else if (k == "rumble") s.rumble = n != 0;
     }
     // Chips left on the poker table when the app was closed go back to the wallet.
     bool any = false;
@@ -107,6 +111,7 @@ void store() {
         out += pre + "won=" + std::to_string(p.totalWon) + "\n";
         out += pre + "lost=" + std::to_string(p.totalLost) + "\n";
         out += pre + "refills=" + std::to_string(p.refills) + "\n";
+        out += pre + "trophies=" + std::to_string(p.trophies) + "\n";
     }
     const Settings& s = g_data.settings;
     out += strf("master=%.2f\nmusic=%.2f\nsfx=%.2f\n", s.master, s.music, s.sfx);
@@ -114,6 +119,8 @@ void store() {
                 s.pokerBlinds, s.pokerBuyIn);
     out += strf("fastDeal=%d\nslotTurbo=%d\nslotBet=%d\nslotRotate=%d\n", s.fastDeal ? 1 : 0, s.slotTurbo ? 1 : 0,
                 s.slotBet, s.slotRotate ? 1 : 0);
+    out += strf("effects=%d\nrumble=%d\n", s.effects ? 1 : 0, s.rumble ? 1 : 0);
+    out += "jackpot=" + std::to_string(g_data.jackpot) + "\n";
     platform::writeFile(platform::savePath(kFile), out);
 }
 

@@ -37,3 +37,10 @@ build-pc/slot_sim: tools/slot_sim.cpp source/games/slot_logic.cpp source/games/s
 slotsim: build-pc/slot_sim
 	./build-pc/slot_sim 2000000
 .PHONY: slotsim
+
+# Art preview tool (all game objects except main).
+build-pc/artlab: tools/artlab.cpp $(filter build-pc/obj/art/% build-pc/obj/core/%,$(OBJS))
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
+
+artlab: build-pc/artlab
+.PHONY: artlab

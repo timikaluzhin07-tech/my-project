@@ -1,5 +1,7 @@
 #include "input.h"
 
+#include "save.h"
+
 #ifdef __SWITCH__
 #include <switch.h>
 #endif
@@ -23,6 +25,13 @@ struct Pad {
 
 Pad g_pads[MAX_PADS];
 
+struct Rumble {
+    float strength = 0, dur = 0, t = 0;
+    bool active = false;
+};
+Rumble g_rumble[MAX_PADS];
+bool g_rumbleOn = true;
+
 #ifdef __SWITCH__
 PadState g_nx[MAX_PADS];
 
@@ -44,8 +53,54 @@ u32 mapNx(u64 b) {
     if (b & HidNpadButton_AnyRight) m |= BTN_RIGHT;
     return m;
 }
+struct Vib {
+    HidVibrationDeviceHandle h[2];
+    int count = 0;
+    HidNpadIdType id = HidNpadIdType_No1;
+    u32 style = 0;
+};
+Vib g_vib[MAX_PADS];
+
+void sendVibration(int i, float amp) {
+    HidNpadIdType id = (HidNpadIdType)(HidNpadIdType_No1 + i);
+    if (i == 0 && g_nx[0].active_handheld) id = HidNpadIdType_Handheld;
+    u32 set = hidGetNpadStyleSet(id);
+    HidNpadStyleTag tag;
+    int n = 2;
+    if (set & HidNpadStyleTag_NpadHandheld) tag = HidNpadStyleTag_NpadHandheld;
+    else if (set & HidNpadStyleTag_NpadFullKey) tag = HidNpadStyleTag_NpadFullKey;
+    else if (set & HidNpadStyleTag_NpadJoyDual) tag = HidNpadStyleTag_NpadJoyDual;
+    else if (set & HidNpadStyleTag_NpadJoyLeft) { tag = HidNpadStyleTag_NpadJoyLeft; n = 1; }
+    else if (set & HidNpadStyleTag_NpadJoyRight) { tag = HidNpadStyleTag_NpadJoyRight; n = 1; }
+    else return;
+    Vib& v = g_vib[i];
+    if (v.count == 0 || v.id != id || v.style != (u32)tag) {
+        if (R_FAILED(hidInitializeVibrationDevices(v.h, n, id, tag))) { v.count = 0; return; }
+        v.count = n;
+        v.id = id;
+        v.style = (u32)tag;
+    }
+    HidVibrationValue val[2];
+    for (int k = 0; k < 2; k++) {
+        val[k].amp_low = amp * 0.9f;
+        val[k].freq_low = 160.f;
+        val[k].amp_high = amp * 0.6f;
+        val[k].freq_high = 320.f;
+    }
+    hidSendVibrationValues(v.h, val, v.count);
+}
 #else
 SDL_GameController* g_ctrl[MAX_PADS] = {};
+
+void sendVibration(int i, float amp) {
+    if (!g_ctrl[i]) return;
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+    Uint16 v = (Uint16)(clamp01(amp) * 65535);
+    SDL_GameControllerRumble(g_ctrl[i], v, (Uint16)(v * 0.7f), 60);
+#else
+    (void)amp;
+#endif
+}
 
 u32 keyboardPad0() {
     const Uint8* k = SDL_GetKeyboardState(nullptr);
@@ -134,7 +189,10 @@ void handleEvent(const SDL_Event& e) {
 #endif
 }
 
+void updateRumble(float dt);
+
 void update(float dt) {
+    updateRumble(dt);
     for (int i = 0; i < MAX_PADS; i++) {
         Pad& p = g_pads[i];
         u32 raw = 0;
@@ -171,6 +229,34 @@ void update(float dt) {
                 }
             }
         }
+    }
+}
+
+void updateRumble(float dt) {
+    for (int i = 0; i < MAX_PADS; i++) {
+        Rumble& r = g_rumble[i];
+        if (!r.active) continue;
+        r.t += dt;
+        if (r.t >= r.dur || !g_rumbleOn) {
+            r.active = false;
+            sendVibration(i, 0);
+            continue;
+        }
+        float k = 1 - r.t / r.dur;
+        sendVibration(i, r.strength * k * k);
+    }
+}
+
+void rumble(int pad, float strength, float seconds) {
+    g_rumbleOn = save::data().settings.rumble;
+    if (!g_rumbleOn || strength <= 0) return;
+    for (int i = 0; i < MAX_PADS; i++) {
+        if (pad != ANY_PAD && pad != i) continue;
+        if (!g_pads[i].connected) continue;
+        Rumble& r = g_rumble[i];
+        float remaining = r.active ? r.strength * (1 - r.t / r.dur) : 0;
+        if (strength < remaining) continue;
+        r = {std::min(1.f, strength), std::max(0.05f, seconds), 0, true};
     }
 }
 

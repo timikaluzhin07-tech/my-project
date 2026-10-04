@@ -4,10 +4,13 @@
 #include "../core/anim.h"
 #include "../core/app.h"
 #include "../core/audio.h"
+#include "../core/fx.h"
 #include "../core/gfx.h"
 #include "../core/input.h"
 #include "../core/save.h"
+#include "../core/trophy.h"
 #include "../core/ui.h"
+#include "quips.h"
 #include "slot_logic.h"
 
 namespace {
@@ -87,6 +90,8 @@ public:
         turbo_ = save::data().settings.slotTurbo;
         nextFlash_ = 3;
     }
+
+    ~SlotsScene() override { audio::stopLoop(rainLoop_, 0.1f); }
 
     audio::Music music() const override { return audio::MUS_OLYMPUS; }
     bool ambience() const override { return false; }
@@ -211,6 +216,7 @@ private:
     // ====================================================================== spin flow
     void startSpin(bool buy) {
         phase_ = SPINNING;
+        riserPlayed_ = false;
         winTarget_ = winShown_ = free_ ? (float)fsTotal_ : 0.f;
         spinWin_ = 0;
         orbTotal_ = 0;
@@ -262,6 +268,11 @@ private:
                 }
             }
         if (scat >= 3) audio::play(audio::SFX_THUNDER, 0.35f);
+        if (!free_ && scat == 3 && !riserPlayed_) {
+            riserPlayed_ = true; // one more lightning and the bonus starts
+            audio::play(audio::SFX_RISER, 0.5f);
+            audio::play(audio::SFX_HEARTBEAT, 0.6f);
+        }
     }
 
     void runStep(size_t k) {
@@ -335,6 +346,8 @@ private:
                 floaters_.push_back({"×" + std::to_string(mult), 640, 330, 0, pal::goldLight});
                 audio::play(audio::SFX_BOOM, 0.6f);
                 flash_ = 0.6f;
+                fx::shake(0.35f);
+                fx::shockwave(640, 330, Color::hex(0xffd060), 320, 0.7f);
                 winTarget_ = (float)(free_ ? fsTotal_ + spin_.baseWin : spin_.baseWin);
             });
             seq_.wait(0.6f);
@@ -349,6 +362,7 @@ private:
                         }
                 audio::play(audio::SFX_THUNDER, 0.9f);
                 flash_ = 1;
+                fx::shake(0.5f);
                 winTarget_ = (float)((free_ ? fsTotal_ : 0) + spin_.total);
             });
             seq_.wait(1.2f);
@@ -377,18 +391,37 @@ private:
             save::recordResult(cur().profile, win - spent_);
             winTarget_ = (float)win;
         }
-        save::store();
+        trophy::unlock(cur().profile, trophy::FIRST_GAME);
+        if (players_.size() >= 3) trophy::unlock(cur().profile, trophy::COMPANY);
         float x = win / (float)bet();
+        if (!free_ && x >= 100) trophy::unlock(cur().profile, trophy::EPIC_WIN);
+        if (!free_) {
+            jackpot::feed(spent_);
+            // progressive jackpot: the chance grows with the bet (worth ~4% of it on average)
+            double p = 0.04 * (double)bet() / (double)jackpot::value();
+            if (jackpot::consumeForced() || rng().chance(p)) {
+                i64 jp = jackpot::take(cur().profile);
+                trophy::unlock(cur().profile, trophy::JACKPOT);
+                jackpot_ = true;
+                save::recordResult(cur().profile, jp);
+                startBigWin(jp);
+                return;
+            }
+        }
+        trophy::checkBalance(cur().profile);
+        save::store();
         if (win > 0 && x >= 15 && !free_) {
             startBigWin(win);
             return;
         }
         if (win > 0) audio::play(x >= 3 ? audio::SFX_BIGWIN : audio::SFX_COIN, x >= 3 ? 0.5f : 0.7f);
+        if (x >= 5) audio::play(audio::SFX_KACHING, 0.55f);
         afterSpin();
     }
 
     void afterSpin() {
         if (!free_ && spin_.freeSpins > 0) {
+            trophy::unlock(cur().profile, trophy::ZEUS_BONUS);
             free_ = true;
             fsEngine_ = Engine();
             fsEngine_.freeGame = true;
@@ -400,7 +433,11 @@ private:
             introT_ = 0;
             audio::play(audio::SFX_BOOM, 0.9f);
             audio::play(audio::SFX_THUNDER, 0.8f);
+            audio::play(audio::SFX_HIT, 0.8f);
+            if (!rainLoop_) rainLoop_ = audio::loop(audio::SFX_RAIN, 0.3f);
             flash_ = 1.2f;
+            fx::shake(0.75f);
+            fx::shockwave(640, 320, Color::hex(0x9ac8ff), 520, 0.9f);
             return;
         }
         if (free_) {
@@ -411,6 +448,9 @@ private:
                 phase_ = FS_OUTRO;
                 introT_ = 0;
                 audio::play(audio::SFX_BIGWIN, 0.8f);
+                audio::play(audio::SFX_APPLAUSE, 0.6f);
+                audio::stopLoop(rainLoop_, 2.f);
+                rainLoop_ = 0;
                 coinShower(60);
             }
             return;
@@ -428,6 +468,8 @@ private:
         save::store();
         i64 tot = fsTotal_;
         winTarget_ = (float)tot;
+        if (tot >= bet() * 100) trophy::unlock(cur().profile, trophy::EPIC_WIN);
+        trophy::checkBalance(cur().profile);
         if (tot >= bet() * 15) { startBigWin(tot); return; }
         phase_ = IDLE;
         if (players_.size() > 1 && save::data().settings.slotRotate) nextPlayer(true);
@@ -448,7 +490,16 @@ private:
         bigT_ = 0;
         bigShown_ = 0;
         audio::play(audio::SFX_BIGWIN, 0.9f);
+        audio::play(audio::SFX_HIT, 0.7f);
+        audio::play(audio::SFX_CHEER, 0.65f);
+        bigQuip_ = jackpot_ ? "Весь зал аплодирует стоя!" : quips::pick(quips::ZEUS_BIG_WIN);
         coinShower(90);
+        float x = amount / (float)bet();
+        if (jackpot_) x = 1000;
+        fx::shake(x >= 50 ? 0.7f : 0.45f);
+        fx::shockwave(640, 300, Color::hex(0xffc040), 560, 0.9f);
+        if (x >= 50) fx::confetti(x >= 100 ? 160 : 90);
+        if (jackpot_) fx::coins(80);
     }
 
     void updateBigWin(float dt) {
@@ -460,6 +511,7 @@ private:
         if (input::pressed(ANY_PAD, BTN_A) && bigT_ < dur) bigT_ = dur;
         else if ((input::pressed(ANY_PAD, BTN_A) && bigT_ > dur + 0.2f) || bigT_ > dur + 2.6f) {
             phase_ = IDLE;
+            jackpot_ = false;
             if (free_) return;
             if (players_.size() > 1 && save::data().settings.slotRotate) { nextPlayer(true); auto_ = false; }
             else if (auto_) seq_.then(0.4f, [this] { if (phase_ == IDLE && auto_) tryStart(); });
@@ -470,13 +522,16 @@ private:
         float a = clamp01(bigT_ * 3);
         gfx::dim(0.55f * a);
         float x = bigAmount_ / (float)bet();
-        const char* title = x >= 100 ? "ЭПИЧЕСКИЙ ВЫИГРЫШ" : (x >= 50 ? "МЕГА ВЫИГРЫШ" : "БОЛЬШОЙ ВЫИГРЫШ");
+        const char* title = jackpot_ ? "ДЖЕКПОТ!" : (x >= 100 ? "ЭПИЧЕСКИЙ ВЫИГРЫШ" : (x >= 50 ? "МЕГА ВЫИГРЫШ" : "БОЛЬШОЙ ВЫИГРЫШ"));
         float pulse = 1 + 0.04f * std::sin(time_ * 6);
         gfx::glowEllipse(640, 300, 420, 160, Color::hex(0xffb030), 0.35f * a);
         gfx::textGold(title, 640, 270, F_TITLE, 58 * pulse, 0, a);
+        float tw = gfx::textWidth(title, F_TITLE, 58 * pulse);
+        fx::shine(640 - tw / 2 - 20, 232, tw + 40, 80, std::fmod(bigT_ * 0.55f, 1.f), 0.6f);
         gfx::textGlow(fmtMoney((i64)bigShown_), 640, 360, F_NUM, 80, Color::hex(0xffc040), 0.6f * a, 0);
         gfx::textShadow(fmtMoney((i64)bigShown_), 640, 360, F_NUM, 80, pal::goldLight, 0, a);
-        gfx::text(strf("×%.0f ставки", x), 640, 430, F_SANS_BOLD, 22, pal::ivory, 0, a);
+        if (!jackpot_) gfx::text(strf("×%.0f ставки", x), 640, 430, F_SANS_BOLD, 22, pal::ivory, 0, a);
+        gfx::text(bigQuip_, 640, 466, F_SERIF, 22, pal::goldLight, 0, a * clamp01(bigT_ - 0.6f));
     }
 
     void drawIntro() {
@@ -503,6 +558,8 @@ private:
         bolts_.push_back({ex, ey, x, y, 0, 0.45f, (uint32_t)rng().range(1, 1 << 30), 1.f});
         audio::play(audio::SFX_ZAP, 0.7f, (x - 640) / 700.f);
         eyeGlow_ = 1;
+        fx::shake(0.14f);
+        fx::shockwave(x, y, Color::hex(0xb0d0ff), 80, 0.4f);
         burst(x, y, Color::hex(0xb0d0ff), 14);
     }
 
@@ -551,6 +608,7 @@ private:
             float x = rng().chance(0.5) ? rng().uniform(120, 330) : rng().uniform(930, 1180);
             skyBolts_.push_back({x, 40, x + rng().uniform(-90, 90), rng().uniform(380, 520), 0, 0.35f, (uint32_t)rng().range(1, 1 << 30), 0.7f});
             flash_ = std::max(flash_, 0.45f);
+            fx::shake(0.12f);
             float pan = (x - 640) / 700.f;
             timers_.add(rng().uniform(0.2f, 0.8f), [pan] { audio::play(audio::SFX_THUNDER, 0.35f, pan); });
         }
@@ -585,6 +643,7 @@ private:
         if (landedCol >= 0 && landedCol != landSoundCol_) {
             landSoundCol_ = landedCol;
             audio::play(audio::SFX_LAND, 0.55f, (cellX(landedCol) - 640) / 700.f, 0.9f + 0.05f * landedCol);
+            input::rumble(ANY_PAD, 0.18f, 0.07f);
         }
     }
 
@@ -745,8 +804,7 @@ private:
         gfx::rectGrad(0, y - 20, SCREEN_W, 140, Color(0, 0, 0, 0), Color(0, 0, 0, 230));
         Profile& p = save::player(cur().profile);
         auto box = [&](float cx, const char* label, const std::string& value, Color vc, float w) {
-            gfx::roundRect(cx - w / 2, y, w, 62, 10, Color(8, 6, 14, 220));
-            gfx::roundRectOutline(cx - w / 2, y, w, 62, 10, 1.2f, pal::gold.alpha(0.55f));
+            ui::plate(cx - w / 2, y, w, 62, true);
             gfx::text(label, cx, y + 16, F_SANS_BOLD, 13, pal::muted, 0);
             gfx::text(value, cx, y + 42, F_NUM, 26, vc, 0);
         };
@@ -827,6 +885,10 @@ private:
     int orbTotal_ = 0, orbShown_ = 0;
     float winShown_ = 0, winTarget_ = 0, bigShown_ = 0, bigT_ = 0, introT_ = 0;
     float time_ = 0, flash_ = 0, eyeGlow_ = 0, nextFlash_ = 3;
+    int rainLoop_ = 0;
+    bool jackpot_ = false;
+    std::string bigQuip_;
+    bool riserPlayed_ = false;
     int landSoundCol_ = -1;
     std::string stepWin_;
     Seq seq_;

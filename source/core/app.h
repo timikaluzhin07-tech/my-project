@@ -13,7 +13,7 @@ public:
     virtual bool ambience() const { return true; }
 };
 
-enum SceneId { SC_BOOT, SC_HALL, SC_BLACKJACK, SC_POKER, SC_ROULETTE, SC_SLOTS, SC_PLAYERS, SC_SETTINGS };
+enum SceneId { SC_BOOT, SC_HALL, SC_BLACKJACK, SC_POKER, SC_ROULETTE, SC_SLOTS, SC_PLAYERS, SC_SETTINGS, SC_TROPHIES };
 
 namespace app {
 
@@ -36,3 +36,4 @@ std::unique_ptr<Scene> makeRouletteScene();
 std::unique_ptr<Scene> makeSlotsScene();
 std::unique_ptr<Scene> makePlayersScene();
 std::unique_ptr<Scene> makeSettingsScene();
+std::unique_ptr<Scene> makeTrophiesScene();

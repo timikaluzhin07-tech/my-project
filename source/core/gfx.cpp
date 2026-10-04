@@ -598,6 +598,24 @@ void drawPart(const Tex& t, float sx, float sy, float sw, float sh, float x, flo
     SDL_RenderCopyF(R, t.tex, &s, &d);
 }
 
+void nine(const Tex& t, float x, float y, float w, float h, float b, float alpha, Color tint) {
+    if (!t || alpha <= 0.f) return;
+    prep(t, alpha, tint, false);
+    float k = t.pw / t.w;
+    float tw = t.w, th = t.h;
+    b = std::min(b, std::min(w, h) / 2);
+    float sxs[4] = {0, b, tw - b, tw}, sys[4] = {0, b, th - b, th};
+    float dxs[4] = {x, x + b, x + w - b, x + w}, dys[4] = {y, y + b, y + h - b, y + h};
+    for (int j = 0; j < 3; j++)
+        for (int i = 0; i < 3; i++) {
+            SDL_Rect src = {(int)std::lround(sxs[i] * k), (int)std::lround(sys[j] * k), (int)std::lround((sxs[i + 1] - sxs[i]) * k),
+                            (int)std::lround((sys[j + 1] - sys[j]) * k)};
+            SDL_FRect dst = {dxs[i], dys[j], dxs[i + 1] - dxs[i], dys[j + 1] - dys[j]};
+            if (src.w <= 0 || src.h <= 0 || dst.w <= 0 || dst.h <= 0) continue;
+            SDL_RenderCopyF(R, t.tex, &src, &dst);
+        }
+}
+
 void rect(float x, float y, float w, float h, Color c) { rectGrad(x, y, w, h, c, c); }
 
 void rectGrad(float x, float y, float w, float h, Color top, Color bottom) {

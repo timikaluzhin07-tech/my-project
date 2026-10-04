@@ -2,15 +2,19 @@
 #include "../art/art.h"
 #include "../art/backdrop.h"
 #include "../art/svg.h"
+#include "../art/shade.h"
 #include "../art/tableart.h"
 #include "../core/anim.h"
 #include "../core/app.h"
 #include "../core/audio.h"
+#include "../core/fx.h"
 #include "../core/gfx.h"
 #include "../core/input.h"
 #include "../core/save.h"
+#include "../core/trophy.h"
 #include "../core/ui.h"
 #include "poker_logic.h"
+#include "quips.h"
 
 namespace {
 
@@ -40,44 +44,62 @@ const char* kRules =
     "Если игроков за столом несколько, карты скрыты: удерживайте R на своём контроллере, чтобы посмотреть их "
     "(остальные не подглядывают!). Фишки за столом — это ваш бай-ин; при выходе они возвращаются на баланс.";
 
+std::string ellipseRing(float rxO, float ryO, float rxI, float ryI) {
+    auto ell = [](float rx, float ry, int sweep) {
+        return "M" + svg::num(TCX - rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 " + std::to_string(sweep) +
+               " " + svg::num(TCX + rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 " + std::to_string(sweep) +
+               " " + svg::num(TCX - rx) + " " + svg::num(TCY) + " Z";
+    };
+    return ell(rxO, ryO, 0) + " " + ell(rxI, ryI, 1);
+}
+
 Image buildTable() {
     const float S = TEX_SCALE;
-    Image img = art::velvetBackdrop(Color::hex(0x1a0d10), Color::hex(0x7a5a2a), 21);
-    std::string s = svg::open(SCREEN_W, SCREEN_H) + "<defs>" +
-                    svg::radialU("rail", TCX, TCY - 40, 640,
-                                 {{0.82f, Color::hex(0x2a2224)}, {0.92f, Color::hex(0x141012)}, {1, Color::hex(0x050404)}}) +
-                    svg::radialU("felt", TCX, TCY - 30, 540, {{0, Color::hex(0x1c6f86)}, {1, Color::hex(0x092b37)}}) +
-                    svg::linear("wood", 0, 0, 0, 1, {{0, Color::hex(0x8a5a2c)}, {1, Color::hex(0x3a210f)}}) + "</defs>";
-    s += svg::ellipse(TCX + 6, TCY + 26, 612, 300, "#000", "fill-opacity=\"0.55\"");
-    s += svg::ellipse(TCX, TCY, 600, 290, svg::url("rail"));
-    s += svg::ellipse(TCX, TCY, 598, 288, "none", svg::stroke("#5a4a48", 1.2f, 0.6f));
-    s += svg::ellipse(TCX, TCY, 572, 264, "none", svg::stroke("#6a5a58", 0.8f, 0.35f) + " stroke-dasharray=\"5 4\"");
-    s += svg::ellipse(TCX, TCY, 548, 248, svg::url("wood"));
-    s += svg::ellipse(TCX, TCY, 543, 243, "none", svg::stroke("#e0c070", 1.f, 0.6f));
-    s += svg::ellipse(TCX, TCY, 536, 238, svg::url("felt"));
-    s += svg::ellipse(TCX, TCY, 420, 172, "none", svg::stroke("#ffffff", 1.2f, 0.13f));
+    Image img = art::velvetBackdrop(Color::hex(0x0d0809), Color::hex(0x2e2216), 21);
+    // soft contact shadow of the table on the carpet
+    for (int py = 0; py < img.h; py++)
+        for (int px = 0; px < img.w; px++) {
+            float dx = (px / S - TCX - 8) / 640, dy = (py / S - TCY - 22) / 318;
+            float n = std::sqrt(dx * dx + dy * dy);
+            float a = clamp01((1.06f - n) / 0.16f) * 0.85f;
+            if (a <= 0) continue;
+            uint8_t* p = img.at(px, py);
+            for (int k = 0; k < 3; k++) p[k] = (uint8_t)(p[k] * (1 - a));
+        }
+    // felt with lamp light and occlusion near the rail
+    Image felt = gfx::rasterSvg(svg::open(SCREEN_W, SCREEN_H) + svg::ellipse(TCX, TCY, 538, 240, "#13586c") + svg::close());
+    felt.grain(0.035f, 5);
+    felt.grain(0.05f, 6, 14);
+    art::feltLight(felt, TCX, TCY - 20, 600, 280,
+                   [](float x, float y) {
+                       float dx = (x - TCX) / 538, dy = (y - TCY) / 240;
+                       return (1 - std::sqrt(dx * dx + dy * dy)) * 240;
+                   },
+                   34, 1.f);
+    img.draw(felt, 0, 0);
+    std::string prints = svg::open(SCREEN_W, SCREEN_H) + svg::ellipse(TCX, TCY, 420, 172, "none", svg::stroke("#ffffff", 1.2f, 0.12f));
     for (int i = 0; i < 5; i++) {
         float x = 640 + (i - 2) * 82.f;
         float w = art::CARD_W * 0.74f, h = art::CARD_H * 0.74f;
-        s += svg::rect(x - w / 2, BOARD_Y - h / 2, w, h, 5, "none", svg::stroke("#ffffff", 1.f, 0.16f));
+        prints += svg::rect(x - w / 2, BOARD_Y - h / 2, w, h, 5, "none", svg::stroke("#ffffff", 1.f, 0.14f));
     }
-    s += svg::close();
-    Image prints = gfx::rasterSvg(s);
-    // felt fibres only inside the playing surface
-    Image felt = art::feltImage(SCREEN_W, SCREEN_H, Color(255, 255, 255), Color(255, 255, 255), 5);
-    for (int py = 0; py < prints.h; py++)
-        for (int px = 0; px < prints.w; px++) {
-            float x = px / S, y = py / S;
-            float ex = (x - TCX) / 536, ey = (y - TCY) / 238;
-            if (ex * ex + ey * ey < 1) {
-                uint8_t* p = prints.at(px, py);
-                float k = felt.at(px, py)[0] / 255.f;
-                p[0] = (uint8_t)(p[0] * k); p[1] = (uint8_t)(p[1] * k); p[2] = (uint8_t)(p[2] * k);
-            }
-        }
-    img.draw(prints, 0, 0);
-    art::stampText(img, "GRAND CASINO", TCX, BOARD_Y - 8, F_TITLE, 30, Color::hex(0xe9d6a0, 46));
-    art::stampText(img, "TEXAS HOLD'EM  ·  NO LIMIT", TCX, BOARD_Y + 22, F_SANS_BOLD, 12, Color::hex(0xe9d6a0, 40));
+    prints += svg::close();
+    img.draw(gfx::rasterSvg(prints), 0, 0);
+    art::stampText(img, "GRAND CASINO", TCX, BOARD_Y - 8, F_TITLE, 30, Color::hex(0xe9d6a0, 40));
+    art::stampText(img, "TEXAS HOLD'EM  ·  NO LIMIT", TCX, BOARD_Y + 22, F_SANS_BOLD, 12, Color::hex(0xe9d6a0, 36));
+    // lacquered wood racetrack with a brass inlay
+    Image wood = gfx::rasterSvg(svg::open(SCREEN_W, SCREEN_H) + svg::path(ellipseRing(551, 251, 536, 238), "#6a3a18", "fill-rule=\"evenodd\"") + svg::close());
+    art::woodGrain(wood, TCX, TCY, Color::hex(0x2e1408), Color::hex(0x8e5426), 41, true, 551.f / 251.f);
+    shade::bevel(wood, 3.f * S, 0.8f, shade::mat::lacquer());
+    img.draw(wood, 0, 0);
+    Image inlay = gfx::rasterSvg(svg::open(SCREEN_W, SCREEN_H) + svg::ellipse(TCX, TCY, 543.5f, 244.5f, "none", svg::stroke("#e2b450", 1.6f)) + svg::close());
+    for (size_t i = 0; i < inlay.px.size(); i += 4) { inlay.px[i] = 0xe2; inlay.px[i + 1] = 0xb4; inlay.px[i + 2] = 0x50; }
+    shade::bevel(inlay, 0.9f * S, 1.f, shade::mat::gold());
+    img.draw(inlay, 0, 0);
+    // padded leather armrest with stitching
+    std::string stitch = svg::ellipse(TCX, TCY, 576, 270, "none", svg::stroke("#9a8478", 1.1f, 0.8f) + " stroke-dasharray=\"4 3.2\"");
+    Image rail = art::leatherRail(ellipseRing(602, 292, 551, 251), SCREEN_W, SCREEN_H, Color::hex(0x231a1c), 22, stitch);
+    img.draw(rail, 0, 0);
     return img;
 }
 
@@ -90,13 +112,17 @@ struct HumanInfo {
 class PokerScene : public Scene {
 public:
     PokerScene() {
-        table_ = gfx::upload(buildTable());
+        table_ = gfx::upload(art::cached("poker.table", buildTable));
+        haze_.init(7, 0, 0, SCREEN_W, SCREEN_H, Color(205, 195, 185), 23);
         art::ensureBuilt();
         buildLobby();
         phase_ = LOBBY;
     }
 
-    ~PokerScene() override { cashOutAll(); }
+    ~PokerScene() override {
+        audio::stopLoop(heartLoop_, 0.05f);
+        cashOutAll();
+    }
 
     void update(float dt) override {
         time_ += dt;
@@ -108,6 +134,14 @@ public:
         pruneDone(flying_);
         timers_.update(dt);
         for (auto& a : actionFlash_) a = std::max(0.f, a - dt);
+        for (auto& q : quipT_) q = std::max(0.f, q - dt);
+        haze_.update(dt);
+        for (int i = 0; i < SEATS; i++) {
+            const Seat& s = t_.seats[i];
+            bool smoking = s.used && s.bot && art::portraitTraits(s.name).cigar && !(s.inHand && s.folded);
+            float ax = PLATE[i].x - 196 / 2.f + 30;
+            wisps_[i].update(dt, ax + art::CIGAR_TIP_X * 46, PLATE[i].y + art::CIGAR_TIP_Y * 46, smoking ? 5.f : 0.f);
+        }
         if (dialog_.update(dt)) return;
         if (phase_ == LOBBY) { updateLobby(dt); return; }
         if (pause_.update(dt)) return;
@@ -128,6 +162,7 @@ public:
     void render() override {
         gfx::draw(table_, 0, 0);
         gfx::glowEllipse(640, 300, 520, 230, Color::hex(0xfff0c8), 0.06f);
+        haze_.render(0.8f);
         if (phase_ == LOBBY) { renderLobby(); dialog_.render(); return; }
         // pot
         if (potShown_ > 0) {
@@ -153,6 +188,8 @@ public:
         }
         for (auto& c : board_) c.draw();
         for (int i = 0; i < SEATS; i++) drawSeat(i);
+        for (auto& w : wisps_) w.render();
+        for (int i = 0; i < SEATS; i++) drawQuip(i);
         for (auto& f : flying_) f.draw();
         caption_.render(640, 212);
         banner_.render(640, 300, 46);
@@ -415,6 +452,12 @@ private:
         t_.apply(i, a);
         Seat& s = t_.seats[i];
         flash(i);
+        if (s.bot) {
+            if (s.allIn) say(i, quips::BOT_ALLIN, 0.8f);
+            else if (a.type == FOLD) say(i, quips::BOT_FOLD, 0.22f);
+            else if (a.type == RAISE) say(i, quips::BOT_RAISE, 0.35f);
+            else if (a.type == CALL) say(i, quips::BOT_CALL, 0.15f);
+        }
         if (s.folded) {
             for (auto& c : holes_[i]) c.moveTo(640, 260, rng().uniform(-30, 30), 0, 0.45f, 0.35f);
             timers_.add(0.36f, [this, i] { holes_[i].clear(); });
@@ -422,7 +465,11 @@ private:
         } else if (s.streetBet > before) {
             fly(s.streetBet - before, PLATE[i], BETPOS[i], 0, 0.3f);
             audio::play(s.allIn ? audio::SFX_CHIPS : audio::SFX_CHIP, 0.9f, panFor(PLATE[i].x));
-            if (s.allIn) caption_.say(s.name + " идёт олл-ин!", 1.8f);
+            if (s.allIn) {
+                caption_.say(s.name + " идёт олл-ин!", 1.8f);
+                fx::shake(0.3f);
+                fx::shockwave(PLATE[i].x, PLATE[i].y, Color::hex(0xff5a4a), 220, 0.6f);
+            }
         } else {
             audio::play(audio::SFX_KNOCK, 0.8f, panFor(PLATE[i].x));
         }
@@ -458,6 +505,7 @@ private:
         if (t_.canActCount() < 2) {
             // everyone is all-in: reveal and run the board out
             phase_ = RUNOUT;
+            if (!heartLoop_) heartLoop_ = audio::loop(audio::SFX_HEARTBEAT, 0.55f);
             seq_.then(0.2f, [this] { revealAll(); });
             seq_.then(1.0f, [this] { endStreet(); });
         } else {
@@ -507,10 +555,20 @@ private:
     }
 
     void award() {
+        audio::stopLoop(heartLoop_, 0.3f);
+        heartLoop_ = 0;
         bool showdown = !t_.onlyOneLeft();
+        std::vector<bool> humanAllIn(SEATS, false);
+        for (int i = 0; i < SEATS; i++) humanAllIn[i] = t_.seats[i].used && !t_.seats[i].bot && t_.seats[i].allIn && !t_.seats[i].folded;
         auto awards = t_.finish();
         std::vector<i64> won(SEATS, 0);
         for (auto& a : awards) won[a.seat] += a.amount;
+        for (int i = 0; i < SEATS; i++)
+            if (humanAllIn[i] && won[i] == 0) {
+                audio::play(audio::SFX_GROAN, 0.45f);
+                input::rumble(input::padForSeat(t_.seats[i].order), 0.6f, 0.4f);
+                break;
+            }
         float d = 0;
         int best = -1;
         for (int i = 0; i < SEATS; i++) {
@@ -524,9 +582,18 @@ private:
         audio::play(audio::SFX_CHIPS, 0.9f);
         if (best >= 0) {
             const Seat& w = t_.seats[best];
+            if (w.bot) say(best, quips::BOT_WIN, 0.7f);
+            for (int i = 0; i < SEATS; i++)
+                if (i != best && t_.seats[i].used && t_.seats[i].bot && won[i] == 0 && t_.seats[i].stack == 0) say(i, quips::BOT_LOSE_BIG, 0.9f);
             std::string sub = showdown ? handNames_[best] : "все сбросили карты";
             banner_.show(w.name + " +" + fmtMoney(won[best]), sub, 2.6f, true);
-            if (!w.bot) audio::play(audio::SFX_WIN, 0.8f);
+            if (!w.bot) {
+                audio::play(audio::SFX_WIN, 0.8f);
+                audio::play(audio::SFX_KACHING, 0.5f);
+                if (won[best] >= 10 * BLINDS[save::data().settings.pokerBlinds][1]) audio::play(audio::SFX_CHEER, 0.5f);
+                fx::burst(PLATE[best].x, PLATE[best].y - 20, 40, Color::hex(0xffd060));
+                if (won[best] >= 10 * BLINDS[save::data().settings.pokerBlinds][1]) fx::coins(30, 0.7f);
+            }
             if (showdown) {
                 std::vector<Card> c(t_.board.begin(), t_.board.end());
                 c.push_back(w.hole[0]);
@@ -540,6 +607,24 @@ private:
         for (int i = 0; i < SEATS; i++) {
             Seat& s = t_.seats[i];
             if (s.used && !s.bot) save::player(s.profile).stake = s.stack;
+        }
+        // trophies
+        for (int i = 0; i < SEATS; i++) {
+            const Seat& s = t_.seats[i];
+            if (!s.used || s.bot) continue;
+            trophy::unlock(s.profile, trophy::FIRST_GAME);
+            if (humansSeated_ >= 3) trophy::unlock(s.profile, trophy::COMPANY);
+            if (won[i] > 0 && !showdown) trophy::unlock(s.profile, trophy::BLUFF);
+            if (won[i] > 0 && showdown) {
+                if (humanAllIn[i]) trophy::unlock(s.profile, trophy::ALLIN_WIN);
+                std::vector<Card> c(t_.board.begin(), t_.board.end());
+                c.push_back(s.hole[0]);
+                c.push_back(s.hole[1]);
+                Category cat = category(evaluate(c.data(), (int)c.size()));
+                if (cat >= Category::QUADS) trophy::unlock(s.profile, trophy::QUADS);
+                if (cat == Category::STRAIGHT_FLUSH) trophy::unlock(s.profile, trophy::STRAIGHT_FLUSH);
+            }
+            trophy::checkBalance(s.profile);
         }
         save::store();
     }
@@ -704,6 +789,31 @@ private:
 
     void flash(int i) { actionFlash_[i] = 2.2f; }
 
+    // A bot says something (speech bubble next to its seat).
+    void say(int i, quips::Kind k, float chance) {
+        if (!rng().chance(chance)) return;
+        quip_[i] = quips::pick(k);
+        quipT_[i] = 2.6f;
+    }
+
+    void drawQuip(int i) {
+        if (quipT_[i] <= 0 || quip_[i].empty()) return;
+        float a = std::min(1.f, (2.6f - quipT_[i]) * 6) * std::min(1.f, quipT_[i] * 3);
+        Pt p = PLATE[i];
+        float bw = gfx::textWidth(quip_[i], F_SANS_BOLD, 14) + 26, bh = 30;
+        bool left = p.x > 780;
+        float bx = left ? p.x - 98 - 14 - bw : p.x + 98 + 14, by = p.y - bh / 2;
+        float lift = (1 - std::min(1.f, (2.6f - quipT_[i]) * 5)) * 8;
+        by += lift;
+        Color fill(246, 240, 226), ink(36, 28, 24);
+        gfx::roundRect(bx + 2, by + 3, bw, bh, 12, Color(0, 0, 0, 90).alpha(a));
+        gfx::roundRect(bx, by, bw, bh, 12, fill.alpha(a));
+        float tx = left ? bx + bw : bx;
+        float dir = left ? 1.f : -1.f;
+        gfx::triangle({tx, by + 9}, {tx, by + 21}, {tx + dir * 10, by + 13}, fill.alpha(a), fill.alpha(a), fill.alpha(a));
+        gfx::text(quip_[i], bx + bw / 2, by + bh / 2, F_SANS_BOLD, 14, ink, 0, a);
+    }
+
     void drawSeat(int i) {
         const Seat& s = t_.seats[i];
         Pt p = PLATE[i];
@@ -722,17 +832,11 @@ private:
         float pulse = 0.5f + 0.5f * std::sin(time_ * 5);
         if (acting || thinking_ == i) gfx::glowEllipse(p.x, p.y, w * 0.8f, h * 1.4f, pal::gold, 0.2f + 0.12f * pulse);
         if (isWinner) gfx::glowEllipse(p.x, p.y, w, h * 1.8f, Color::hex(0xffd36a), 0.35f + 0.15f * pulse);
-        gfx::roundRect(p.x - w / 2, p.y - h / 2, w, h, 10, Color(10, 8, 11, (uint8_t)(235 * a)));
-        gfx::roundRectOutline(p.x - w / 2, p.y - h / 2, w, h, 10, acting ? 2.f : 1.f,
-                              acting ? pal::gold : Color(255, 255, 255, (uint8_t)(50 * a)));
+        ui::plate(p.x - w / 2, p.y - h / 2, w, h, acting || isWinner, a);
         float ax = p.x - w / 2 + 30;
         if (s.bot) {
-            Color c = playerColor(s.color).scaled(0.7f);
-            gfx::circle(ax, p.y, 21, Color(0, 0, 0, 160));
-            gfx::circle(ax, p.y, 19, c.alpha(a));
-            gfx::ring(ax, p.y, 19, 1.4f, pal::gold.alpha(0.7f * a));
-            std::string ini = s.name.substr(0, (unsigned char)s.name[0] >= 0xC0 ? 2 : 1);
-            gfx::text(ini, ax, p.y, F_SERIF, 20, pal::ivory, 0, a);
+            gfx::circle(ax, p.y + 2, 24, Color(0, 0, 0, 140).alpha(a));
+            gfx::drawCentered(portrait(s.name), ax, p.y, 1.f, 0, a);
         } else {
             gfx::drawCentered(art::playerChip(s.color), ax, p.y, 0.86f, 0, a);
         }
@@ -766,6 +870,13 @@ private:
             gfx::text(bubble, p.x, by, F_SANS_BOLD, 14, bc, 0);
         }
         if (top) for (auto& c : holes_[i]) drawHole(i, c);
+    }
+
+    // Bot portraits are rendered once per name and kept for the session at the table.
+    const Tex& portrait(const std::string& name) {
+        auto it = portraits_.find(name);
+        if (it == portraits_.end()) it = portraits_.emplace(name, gfx::upload(art::botPortrait(name, 46))).first;
+        return it->second;
     }
 
     void drawHole(int seat, const CardSprite& c) {
@@ -857,6 +968,12 @@ private:
     }
 
     Tex table_;
+    std::map<std::string, Tex> portraits_;
+    fx::Haze haze_;
+    std::string quip_[SEATS];
+    float quipT_[SEATS] = {};
+    int heartLoop_ = 0;
+    fx::Wisp wisps_[SEATS];
     Table t_;
     Phase phase_ = LOBBY;
     ui::Menu lobby_;

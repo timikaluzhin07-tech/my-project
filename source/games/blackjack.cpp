@@ -1,16 +1,20 @@
 // Blackjack table: up to five players against the dealer.
 #include "../art/art.h"
 #include "../art/backdrop.h"
+#include "../art/shade.h"
 #include "../art/svg.h"
 #include "../art/tableart.h"
 #include "../core/anim.h"
 #include "../core/app.h"
 #include "../core/audio.h"
+#include "../core/fx.h"
 #include "../core/gfx.h"
 #include "../core/input.h"
 #include "../core/save.h"
+#include "../core/trophy.h"
 #include "../core/ui.h"
 #include "blackjack_logic.h"
+#include "quips.h"
 
 namespace {
 
@@ -55,10 +59,100 @@ const char* kRules =
     "Если у дилера открыт туз, можно взять страховку за половину ставки — она платит 2 к 1, "
     "когда у дилера блэкджек.";
 
+std::string ellipseRing(float rxO, float ryO, float rxI, float ryI) {
+    auto ell = [](float rx, float ry, int sweep) {
+        return "M" + svg::num(TCX - rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 " + std::to_string(sweep) +
+               " " + svg::num(TCX + rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 " + std::to_string(sweep) +
+               " " + svg::num(TCX - rx) + " " + svg::num(TCY) + " Z";
+    };
+    return ell(rxO, ryO, 0) + " " + ell(rxI, ryI, 1);
+}
+
+shade::Layer layer(const std::string& svgBody, const shade::Material& m, float bevel, float depth = 1.f, int shadow = 0) {
+    shade::Layer l;
+    l.svg = svgBody;
+    l.mat = m;
+    l.bevel = bevel;
+    l.depth = depth;
+    l.shadow = shadow;
+    return l;
+}
+
+// Dealer's lacquered edge with the brass trim and the chip float tray.
+Image buildDealerEdge() {
+    std::vector<shade::Layer> L;
+    shade::Layer bar = layer(svg::rect(-40, -40, SCREEN_W + 80, 76, 0, "#6a3a1a"), shade::mat::lacquer(), 7, 0.7f);
+    bar.paint = [](Image& im) { art::woodGrain(im, 0, 0, Color::hex(0x2a1208), Color::hex(0x8a4e24), 77, false); };
+    L.push_back(bar);
+    L.push_back(layer(svg::rect(-40, 31, SCREEN_W + 80, 3.2f, 0, "#e2b450"), shade::mat::gold(), 1.4f));
+    L.push_back(layer(svg::rect(468, -20, 344, 72, 9, "#1a120c"), shade::mat::lacquer(), 5, 0.9f, 6));
+    L.push_back(layer(svg::rect(477, -20, 326, 63, 5, "#0b0807"), shade::mat::leather(), 3, -0.8f));
+    static const uint32_t cols[] = {0xd9a62b, 0x5b2c86, 0x232327, 0x232327, 0x1f8a52, 0x1f8a52,
+                                    0xb3202e, 0xb3202e, 0x1f5fae, 0x1f5fae, 0xb8541d, 0x146c63};
+    std::string chips;
+    for (int i = 0; i < 12; i++) {
+        float x = 482 + i * 26.6f;
+        Color c = Color::hex(cols[i]);
+        chips += svg::rect(x, -20, 23, 60, 4, c.css());
+        // chip edges: grooves between chips and the white edge inserts
+        for (float y = -18; y < 39; y += 4.4f) {
+            chips += svg::rect(x, y, 23, 0.8f, 0, c.scaled(0.45f).css());
+            if ((int)((y + 18) / 4.4f) % 2 == 0) {
+                chips += svg::rect(x + 3, y + 1.2f, 4, 2.4f, 0, "#f2eee4");
+                chips += svg::rect(x + 16, y + 1.2f, 4, 2.4f, 0, "#f2eee4");
+            }
+        }
+    }
+    shade::Layer cl = layer(chips, shade::mat::clay(), 11.5f, 0.9f);
+    cl.grain = 0.04f;
+    L.push_back(cl);
+    L.push_back(layer(svg::rect(468, 41, 344, 7, 3, "#cfd0d6"), shade::mat::silver(), 2.5f, 1.f, 3));
+    return art::regionRelief(0, 0, SCREEN_W, 70, L);
+}
+
+// Smoked-acrylic shoe and discard holder.
+Image buildShoe(bool discard, float& ox, float& oy) {
+    Pt c = discard ? DISCARD : SHOE;
+    float R = 86;
+    ox = c.x - R;
+    oy = c.y - 8 - R;
+    std::string g = "<g transform=\"translate(" + svg::num(c.x) + " " + svg::num(c.y - 8) + ") rotate(" + (discard ? "25" : "-25") + ")\">";
+    std::vector<shade::Layer> L;
+    if (!discard) {
+        L.push_back(layer(g + svg::rect(-46, -36, 92, 82, 9, "#141318") + "</g>", shade::mat::gloss(), 9, 0.9f, 8));
+        L.push_back(layer(g + svg::rect(-38, -28, 76, 58, 5, "#08080a") + "</g>", shade::mat::gloss(), 3, -0.8f));
+        std::string back = svg::rect(-35, -25, 70, 52, 4, "#7a1028") + svg::rect(-31, -21, 62, 44, 3, "none", svg::stroke("#e2b450", 1.2f));
+        for (float c = -44; c < 62; c += 7) {
+            float u0 = std::max(0.f, c), u1 = std::min(62.f, c + 44);
+            back += svg::line(-31 + u0, -21 + u0 - c, -31 + u1, -21 + u1 - c, "#e2b450", 0.5f, 0.5f);
+            back += svg::line(-31 + u0, 23 - (u0 - c), -31 + u1, 23 - (u1 - c), "#e2b450", 0.5f, 0.5f);
+        }
+        L.push_back(layer(g + back + "</g>", shade::mat::lacquer(), 1.5f, 0.6f));
+        L.push_back(layer(g + svg::rect(-48, 28, 96, 20, 5, "#c9cad2") + "</g>", shade::mat::silver(), 4, 1.f, 3));
+        L.push_back(layer(g + svg::rect(-30, 35, 60, 5, 2.5f, "#060607") + "</g>", shade::mat::gloss(), 1.5f, -1.f));
+    } else {
+        L.push_back(layer(g + svg::rect(-44, -34, 88, 78, 7, "#101014") + "</g>", shade::mat::gloss(), 7, 0.9f, 8));
+        L.push_back(layer(g + svg::rect(-37, -27, 74, 64, 4, "#1c1c22") + "</g>", shade::mat::gloss(), 3, -0.8f));
+        std::string stack;
+        for (int k = 0; k < 4; k++)
+            stack += "<g transform=\"rotate(" + svg::num(-3.f + k * 2.2f) + ")\">" + svg::rect(-31, -23, 62, 54, 3, k == 3 ? "#7a1028" : "#5a0a1c", svg::stroke("#e2b450", 0.8f, 0.8f)) + "</g>";
+        L.push_back(layer(g + stack + "</g>", shade::mat::lacquer(), 1.2f, 0.5f));
+        L.push_back(layer(g + svg::rect(-46, 38, 92, 9, 4, "#c9cad2") + "</g>", shade::mat::silver(), 3, 1.f, 3));
+    }
+    return art::regionRelief(ox, oy, 2 * R, 2 * R, L, 4);
+}
+
 Image buildTable() {
     const float S = TEX_SCALE;
     int W = (int)(SCREEN_W * S), H = (int)(SCREEN_H * S);
     Image img = art::feltImage(SCREEN_W, SCREEN_H, Color::hex(0x1f7d4e), Color::hex(0x0a3a23), 11);
+    // lamp over the table, occlusion along the rail and the dealer's edge
+    art::feltLight(img, TCX, 330, 560, 330,
+                   [](float x, float y) {
+                       float dx = (x - TCX) / FELT_RX, dy = (y - TCY) / FELT_RY;
+                       return std::min((1 - std::sqrt(dx * dx + dy * dy)) * FELT_RY, y - 34.f);
+                   },
+                   30, 0.8f);
     // outside the felt is the dark room
     for (int py = 0; py < H; py++)
         for (int px = 0; px < W; px++) {
@@ -74,53 +168,7 @@ Image buildTable() {
                 p[2] = (uint8_t)lerp(p[2], 6, k);
             }
         }
-    std::string s = svg::open(SCREEN_W, SCREEN_H) + "<defs>" +
-                    svg::radialU("rail", TCX, TCY, 735,
-                                 {{0.9f, Color::hex(0x3d2416)}, {0.95f, Color::hex(0x24140c)}, {1, Color::hex(0x0e0805)}}) +
-                    svg::linear("wood", 0, 0, 0, 1, {{0, Color::hex(0x4a2c18)}, {1, Color::hex(0x24140a)}}) +
-                    svg::linear("tray", 0, 0, 0, 1, {{0, Color::hex(0x0d0a09)}, {1, Color::hex(0x231a14)}}) +
-                    "</defs>";
-    // padded rail along the curved edge
-    auto ell = [](float rx, float ry, bool reverse) {
-        std::string d;
-        if (!reverse)
-            d = "M" + svg::num(TCX - rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 0 " +
-                svg::num(TCX + rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 0 " +
-                svg::num(TCX - rx) + " " + svg::num(TCY) + " Z";
-        else
-            d = "M" + svg::num(TCX - rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 1 " +
-                svg::num(TCX + rx) + " " + svg::num(TCY) + " A" + svg::num(rx) + " " + svg::num(ry) + " 0 1 1 " +
-                svg::num(TCX - rx) + " " + svg::num(TCY) + " Z";
-        return d;
-    };
-    s += svg::path(ell(FELT_RX + 46, FELT_RY + 46, false) + " " + ell(FELT_RX, FELT_RY, true), svg::url("rail"),
-                   "fill-rule=\"evenodd\"");
-    s += svg::ellipse(TCX, TCY, FELT_RX + 2, FELT_RY + 2, "none", svg::stroke("#7a5236", 2.2f, 0.9f));
-    s += svg::ellipse(TCX, TCY, FELT_RX + 23, FELT_RY + 23, "none",
-                      svg::stroke("#8c6a4c", 1.f, 0.55f) + " stroke-dasharray=\"4 4\"");
-    // dealer's edge and chip tray
-    s += svg::rect(0, 0, SCREEN_W, 30, 0, svg::url("wood"));
-    s += svg::rect(0, 29, SCREEN_W, 2, 0, "#b08a3a");
-    s += svg::rect(476, -4, 328, 52, 6, svg::url("tray"), svg::stroke("#9a7838", 1.2f));
-    static const uint32_t cols[] = {0xd9a62b, 0x5b2c86, 0x232327, 0x232327, 0x1f8a52, 0x1f8a52, 0xb3202e, 0xb3202e, 0x1f5fae, 0x1f5fae, 0xb8541d, 0x146c63};
-    for (int i = 0; i < 12; i++) {
-        float x = 486 + i * 26.4f;
-        Color c = Color::hex(cols[i]);
-        std::string id = "c" + std::to_string(i);
-        s += "<defs>" + svg::linear(id, 0, 0, 1, 0, {{0, c.scaled(0.55f)}, {0.45f, c.scaled(1.25f)}, {1, c.scaled(0.5f)}}) + "</defs>";
-        s += svg::rect(x, 0, 22, 42, 3, svg::url(id));
-        for (float y = 3; y < 40; y += 4.2f) s += svg::rect(x + 2, y, 18, 1.2f, 0.5f, "#ffffff", "fill-opacity=\"0.35\"");
-    }
-    // card shoe and discard holder
-    s += "<g transform=\"translate(" + svg::num(SHOE.x) + " " + svg::num(SHOE.y - 8) + ") rotate(-25)\">";
-    s += svg::rect(-46, -36, 92, 82, 8, "#141318", svg::stroke("#4a4a52", 1.2f));
-    s += svg::rect(-38, -28, 76, 60, 4, "#6d1426", svg::stroke("#e3c46d", 0.8f));
-    s += svg::rect(-46, 30, 92, 16, 4, "#0b0a0d");
-    s += "</g>";
-    s += "<g transform=\"translate(" + svg::num(DISCARD.x) + " " + svg::num(DISCARD.y - 8) + ") rotate(25)\">";
-    s += svg::rect(-44, -34, 88, 78, 6, "#0f0f12", svg::stroke("#3a3a42", 1.f) + " fill-opacity=\"0.85\"");
-    s += svg::rect(-34, -24, 68, 56, 3, "#f2ecdf", "fill-opacity=\"0.25\"");
-    s += "</g>";
+    std::string s = svg::open(SCREEN_W, SCREEN_H);
     // insurance band
     auto arc = [](float rx, float ry, float a0, float a1) {
         float x0 = TCX + std::cos(a0) * rx, y0 = TCY + std::sin(a0) * ry;
@@ -146,6 +194,29 @@ Image buildTable() {
                  Color::hex(0xe9dcb6, 190), 1.05f);
     art::arcText(img, "INSURANCE  PAYS  2  TO  1", TCX, TCY, 436, 193, F_SANS_BOLD, 15, goldInk, 1.15f);
     art::stampText(img, "GRAND CASINO", TCX, 214, F_TITLE, 13, Color::hex(0xe4c66c, 110));
+    // padded leather armrest with a brass edge
+    {
+        const float top = 300;
+        std::vector<shade::Layer> L;
+        shade::Layer rail = layer(svg::path(ellipseRing(FELT_RX + 50, FELT_RY + 50, FELT_RX + 3, FELT_RY + 3), "#2e1c14", "fill-rule=\"evenodd\""),
+                                  shade::mat::leather(), 22, 0.55f, 10);
+        rail.grain = 0.06f;
+        rail.grainCell = 2.2f;
+        rail.shadowOpacity = 0.6f;
+        L.push_back(rail);
+        L.push_back(layer(svg::ellipse(TCX, TCY, FELT_RX + 26, FELT_RY + 26, "none", svg::stroke("#a08a70", 1.1f, 0.8f) + " stroke-dasharray=\"4 3.2\""),
+                          shade::mat::leather(), 0.6f, -0.8f));
+        L.push_back(layer(svg::path(ellipseRing(FELT_RX + 4, FELT_RY + 4, FELT_RX, FELT_RY), "#e2b450", "fill-rule=\"evenodd\""),
+                          shade::mat::gold(), 1.6f));
+        Image r = art::regionRelief(0, top, SCREEN_W, SCREEN_H - top, L);
+        img.draw(r, 0, (int)(top * S));
+    }
+    img.draw(buildDealerEdge(), 0, 0);
+    for (int d = 0; d < 2; d++) {
+        float ox, oy;
+        Image sh = buildShoe(d == 1, ox, oy);
+        img.draw(sh, (int)std::lround(ox * S), (int)std::lround(oy * S));
+    }
     img.vignette(0.35f, 0.5f);
     return img;
 }
@@ -173,7 +244,7 @@ struct Seat {
 class BlackjackScene : public Scene {
 public:
     BlackjackScene() : shoe_(bj::DECKS, 0.75f) {
-        table_ = gfx::upload(buildTable());
+        table_ = gfx::upload(art::cached("blackjack.table", buildTable));
         art::ensureBuilt();
         auto act = save::active();
         static const int layouts[5][5] = {{2}, {3, 1}, {3, 2, 1}, {4, 3, 2, 1}, {4, 3, 2, 1, 0}};
@@ -227,7 +298,7 @@ public:
             i64 shown = 0;
             if (s.inRound()) for (auto& h : s.hands) shown += h.bet;
             else shown = s.bet - s.flying;
-            if (shown > 0) art::drawChipStack(shown, p.x, p.y + 4, 0.64f, 1.f, 2);
+            if (shown > 0) art::drawChipStack(shown, p.x, p.y + 8, 0.78f, 1.f, 2);
             if (s.insurance > 0) {
                 Pt ip = insurancePos(s);
                 art::drawChipStack(s.insurance, ip.x, ip.y, 0.5f);
@@ -531,7 +602,7 @@ private:
             h.moveTo(dealerX(1, (int)dealer_.size()), DEALER_Y, 0, 0, DEALER_SCALE, 0.2f);
             if (bj::isBlackjack(dealer_)) {
                 revealHole();
-                caption_.say("У дилера блэкджек", 2.5f);
+                caption_.say(quips::pick(quips::DEALER_BLACKJACK), 2.5f);
                 for (auto& s : seats_)
                     if (s.insurance > 0) {
                         i64 win = s.insurance * 3;
@@ -589,6 +660,12 @@ private:
                         h.done = true;
                         setLabel(s, s.cur, "БЛЭКДЖЕК", pal::goldLight);
                         audio::play(audio::SFX_WIN, 0.7f, panFor(spotPos(s.spot).x));
+                        Pt bp = spotPos(s.spot);
+                        fx::burst(bp.x, bp.y - 60, 40, Color::hex(0xffd060));
+                        fx::shockwave(bp.x, bp.y - 60, Color::hex(0xffd060), 150, 0.55f);
+                        input::rumble(padOf(s), 0.5f, 0.3f);
+                        audio::play(audio::SFX_APPLAUSE, 0.45f);
+                        caption_.say(quips::pick(quips::PLAYER_BLACKJACK), 2.f);
                     }
                     h.done = true;
                     s.cur++;
@@ -620,7 +697,13 @@ private:
             if (h.bust()) {
                 h.done = true;
                 setLabel(s, s.cur, "ПЕРЕБОР", pal::redBright);
-                seq_.then(0.35f, [px] { audio::play(audio::SFX_LOSE, 0.6f, panFor(px)); });
+                seq_.then(0.35f, [this, px, pad] {
+                    audio::play(audio::SFX_LOSE, 0.6f, panFor(px));
+                    audio::play(audio::SFX_GROAN, 0.3f, panFor(px));
+                    if (rng().chance(0.6)) caption_.say(quips::pick(quips::PLAYER_BUST), 2.2f);
+                    input::rumble(pad, 0.45f, 0.25f);
+                    fx::shake(0.12f, false);
+                });
             } else if (h.tot().value == 21) {
                 h.done = true;
             }
@@ -707,7 +790,10 @@ private:
             seq_.then(save::data().settings.fastDeal ? 0.45f : 0.75f, [this] { dealerDraw(); });
         } else {
             int v = bj::total(dealer_).value;
-            if (v > 21) caption_.say("У дилера перебор!", 2.5f);
+            if (v > 21) {
+                caption_.say(quips::pick(quips::DEALER_BUST), 2.5f);
+                audio::play(audio::SFX_APPLAUSE, 0.35f);
+            }
             else caption_.say("У дилера " + std::to_string(v), 2.5f);
             seq_.then(0.6f, [this] { settle(); });
         }
@@ -718,9 +804,13 @@ private:
         phase_ = SETTLING;
         bool anyWin = false, anyBJ = false, big = false;
         float delay = 0;
+        int inRound = 0;
+        for (auto& s : seats_) inRound += s.inRound();
+        bool dealerBust = bj::total(dealer_).value > 21;
         for (auto& s : seats_) {
             if (!s.inRound()) continue;
             Pt sp = spotPos(s.spot), plate = platePos(s);
+            int handWins = 0;
             for (size_t h = 0; h < s.hands.size(); h++) {
                 bj::Outcome o;
                 i64 ret = bj::settle(s.hands[h], dealer_, &o);
@@ -735,6 +825,10 @@ private:
                     case bj::BUST: setLabel(s, (int)h, "ПЕРЕБОР", pal::redBright); break;
                     default: setLabel(s, (int)h, "ПРОИГРЫШ", pal::redBright); break;
                 }
+                if (o == bj::BLACKJACK) trophy::unlock(s.profile, trophy::BLACKJACK);
+                if (o == bj::WIN || o == bj::BLACKJACK) handWins++;
+                if (o == bj::WIN && s.hands[h].cards.size() >= 5) trophy::unlock(s.profile, trophy::FIVE_CARDS);
+                if (o == bj::WIN && s.hands[h].doubled) trophy::unlock(s.profile, trophy::DOUBLE_WIN);
                 bj::Hand* hp = &s.hands[h];
                 if (ret > bet) flyChips(ret - bet, TRAY, sp, delay, 0.5f);
                 if (ret < bet) {
@@ -754,12 +848,29 @@ private:
             i64 net = s.returned - s.staked;
             save::recordResult(s.profile, net);
             if (net >= 1000 && net >= s.staked * 2) big = true;
+            if (s.hands.size() >= 2 && handWins == (int)s.hands.size()) trophy::unlock(s.profile, trophy::SPLIT_WIN);
+            if (dealerBust) trophy::unlock(s.profile, trophy::DEALER_BUST);
+            trophy::unlock(s.profile, trophy::FIRST_GAME);
+            if (inRound >= 3) trophy::unlock(s.profile, trophy::COMPANY);
+            jackpot::feed(s.staked);
+            trophy::checkBalance(s.profile);
         }
         save::store();
         audio::play(audio::SFX_CHIPS, 0.8f);
-        if (anyBJ) { banner_.show("БЛЭКДЖЕК!", "", 2.0f); audio::play(audio::SFX_BIGWIN, 0.7f); }
-        else if (big) { banner_.show("КРУПНЫЙ ВЫИГРЫШ", "", 2.0f); audio::play(audio::SFX_BIGWIN, 0.6f); }
-        else if (anyWin) audio::play(audio::SFX_WIN, 0.7f);
+        if (anyBJ) {
+            banner_.show("БЛЭКДЖЕК!", "", 2.0f);
+            audio::play(audio::SFX_BIGWIN, 0.7f);
+            audio::play(audio::SFX_CHEER, 0.5f);
+            fx::coins(26, 0.6f);
+            fx::shake(0.25f);
+        } else if (big) {
+            banner_.show("КРУПНЫЙ ВЫИГРЫШ", "", 2.0f);
+            audio::play(audio::SFX_BIGWIN, 0.6f);
+            audio::play(audio::SFX_CHEER, 0.55f);
+            fx::coins(40, 0.8f);
+            fx::shake(0.3f);
+        } else if (anyWin) audio::play(audio::SFX_WIN, 0.7f);
+        if (anyWin || anyBJ) audio::play(audio::SFX_KACHING, 0.45f);
         endTimer_ = 0;
         seq_.then(1.0f, [this] { phase_ = ROUND_END; });
     }

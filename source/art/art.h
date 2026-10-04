@@ -18,10 +18,18 @@ void buildStep(int step);
 void ensureBuilt();
 void shutdown();
 
+// Shaded art is expensive to render (seconds on the Switch), so table and slot
+// images are made once per session and kept on the CPU side.
+const Image& cached(const std::string& key, const std::function<Image()>& make);
+
 std::string suitShape(int suit);   // SVG elements in a 100x100 box
 Color suitColor(int suit);
 
 const Tex& cardFace(const Card& c);
+// Uncached CPU images (previews, icons).
+Image cardImage(const Card& c);
+Image cardBackImage();
+Image chipImage(int denom, bool piece);
 const Tex& cardBack();
 const Tex& chip(int denom);
 const Tex& playerChip(int colorIdx);

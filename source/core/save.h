@@ -16,6 +16,7 @@ struct Profile {
     i64 totalWon = 0;
     i64 totalLost = 0;
     int refills = 0;        // how many times the cashier topped the player up
+    uint32_t trophies = 0;  // bit per trophy::Id
 };
 
 struct Settings {
@@ -30,11 +31,14 @@ struct Settings {
     bool slotTurbo = false;
     int slotBet = 2;        // index into slot bet levels
     bool slotRotate = true; // pass the slot machine to the next player after each spin
+    bool effects = true;    // camera shake and film grain
+    bool rumble = true;     // controller vibration
 };
 
 struct SaveData {
     Profile players[MAX_PLAYERS];
     Settings settings;
+    i64 jackpot = 50000;    // progressive jackpot pool shared by the whole casino
 };
 
 Color playerColor(int idx);
