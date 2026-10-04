@@ -1,0 +1,39 @@
+# Desktop (Linux) build used for development and automated screenshots.
+#   make -f Makefile.pc -j8 && ./build-pc/grandcasino
+CXX      ?= g++
+SRCS     := $(shell find source -name '*.cpp')
+OBJS     := $(patsubst source/%.cpp,build-pc/obj/%.o,$(SRCS))
+CXXFLAGS := -std=c++17 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -MMD -MP \
+            $(shell pkg-config --cflags sdl2 SDL2_ttf)
+LIBS     := $(shell pkg-config --libs sdl2 SDL2_ttf) -lpthread
+
+build-pc/grandcasino: $(OBJS)
+	$(CXX) -o $@ $^ $(LIBS)
+
+build-pc/obj/%.o: source/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	rm -rf build-pc
+
+-include $(OBJS:.o=.d)
+.PHONY: clean
+
+# Rule checks without SDL.
+TEST_SRCS := tools/logic_tests.cpp source/core/common.cpp source/games/poker_logic.cpp source/games/slot_logic.cpp
+build-pc/logic_tests: $(TEST_SRCS) $(wildcard source/games/*.h)
+	@mkdir -p build-pc
+	$(CXX) -std=c++17 -O2 -g -Wall -Wextra -Wno-unused-parameter -o $@ $(TEST_SRCS)
+
+tests: build-pc/logic_tests
+	./build-pc/logic_tests
+.PHONY: tests
+
+build-pc/slot_sim: tools/slot_sim.cpp source/games/slot_logic.cpp source/games/slot_logic.h source/core/common.cpp
+	@mkdir -p build-pc
+	$(CXX) -std=c++17 -O2 -o $@ tools/slot_sim.cpp source/games/slot_logic.cpp source/core/common.cpp
+
+slotsim: build-pc/slot_sim
+	./build-pc/slot_sim 2000000
+.PHONY: slotsim

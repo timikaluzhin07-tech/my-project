@@ -1,0 +1,10 @@
+build/
+build-pc/
+*.elf
+*.nacp
+/GrandCasinoNX.nro
+*.map
+*.tmp
+save.cfg
+shots/
+build-asan/

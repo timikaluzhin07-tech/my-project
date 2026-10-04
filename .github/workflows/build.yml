@@ -1,0 +1,30 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  switch:
+    name: Nintendo Switch (.nro)
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make -j"$(nproc)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GrandCasinoNX
+          path: GrandCasinoNX.nro
+
+  rules:
+    name: Rule tests and slot RTP
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Logic tests
+        run: make -f Makefile.pc tests
+      - name: Slot statistics
+        run: make -f Makefile.pc build-pc/slot_sim && ./build-pc/slot_sim 500000
